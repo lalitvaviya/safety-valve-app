@@ -2,8 +2,9 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from fpdf import FPDF
+import time
 
-# --- 1. SAFE IMPORT ---
+# --- 1. SAFE IMPORT (Prevents crash if CoolProp is missing) ---
 try:
     import CoolProp.CoolProp as CP
     COOLPROP_AVAILABLE = True
@@ -18,7 +19,7 @@ st.set_page_config(page_title="SGM Valve Sizing", layout="wide", page_icon="🛡
 if 'project_log' not in st.session_state:
     st.session_state.project_log = []
 
-# --- API 526 STANDARD SIZES ---
+# --- API 526 STANDARD SIZES (Orifice -> Typical Size) ---
 api_526_sizes = {
     'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'),
     'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'),
@@ -27,18 +28,34 @@ api_526_sizes = {
     'R': ('6"', '8"'), 'T': ('8"', '10"')
 }
 
-# --- PDF GENERATOR ---
+# --- PDF GENERATOR (With Watermark) ---
 def create_datasheet(project_data, process_data, valve_data, mech_data, results_data):
     class PDF(FPDF):
         def header(self):
-            try: self.image('logo.png', 10, 8, 33) 
-            except: pass 
+            # --- 1. WATERMARK (Background) ---
+            # Using 'watermark.png' centered on the page
+            try:
+                # x=45, y=80, width=120
+                self.image('watermark.png', x=45, y=80, w=120) 
+            except:
+                pass # If watermark file is missing, just skip it
+
+            # --- 2. HEADER LOGO (Top Left) ---
+            # Using 'logo.png' for the sharp company logo
+            try:
+                self.image('logo.png', 10, 8, 33) 
+            except: 
+                pass 
+
+            # --- 3. HEADER TEXT ---
             self.set_y(10)
             self.set_font('Arial', 'B', 16)
             self.cell(0, 10, 'Safety Valve Datasheet (API 526)', 0, 1, 'C')
+            
             self.set_font('Arial', 'B', 12)
-            self.set_text_color(0, 51, 102)
+            self.set_text_color(0, 51, 102) # SGM Blue
             self.cell(0, 8, 'SGM Valves and System Pvt Ltd', 0, 1, 'C')
+            
             self.set_text_color(0, 0, 0)
             self.ln(5)
             self.set_line_width(0.5)
@@ -54,40 +71,70 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
     pdf = PDF()
     pdf.add_page()
     
+    # Helper to print sections
     def print_section(title, data_dict):
         pdf.set_font("Arial", 'B', 11)
         pdf.set_fill_color(230, 230, 230)
         pdf.cell(0, 7, title, 0, 1, 'L', fill=True)
         pdf.ln(1)
         pdf.set_font("Arial", size=9)
+        
         keys = list(data_dict.keys())
         for i in range(0, len(keys), 2):
             k1 = keys[i]
             v1 = str(data_dict[k1])
             pdf.cell(45, 6, f"{k1}:", 0, 0)
             pdf.cell(50, 6, v1, 0, 0)
+            
             if i + 1 < len(keys):
                 k2 = keys[i+1]
                 v2 = str(data_dict[k2])
                 pdf.cell(45, 6, f"{k2}:", 0, 0)
                 pdf.cell(50, 6, v2, 0, 1)
-            else: pdf.ln(6)
+            else:
+                pdf.ln(6)
         pdf.ln(3)
 
+    # PRINT SECTIONS
     print_section("1. General Project Details", project_data)
     print_section("2. Process Conditions", process_data)
     print_section("3. Fluid Properties & Coefficients", valve_data)
     print_section("4. Mechanical Construction", mech_data)
     
+    # Results Box (White filled to ensure readability over watermark)
     pdf.ln(2)
-    pdf.set_fill_color(255, 255, 255)
-    pdf.set_draw_color(0, 51, 102)
+    pdf.set_fill_color(255, 255, 255) 
+    pdf.set_draw_color(0, 51, 102) # Blue border
     pdf.set_line_width(0.4)
     current_y = pdf.get_y()
-    pdf.rect(10, current_y, 190, 25) 
-    print_section("5. Sizing & Selection Results", results_data)
+    pdf.rect(10, current_y, 190, 25, 'DF') # DF = Draw & Fill
+    
+    # Manually print title inside box
+    pdf.set_xy(10, current_y)
+    pdf.set_font("Arial", 'B', 11)
+    pdf.set_fill_color(230, 230, 230)
+    pdf.cell(190, 7, "5. Sizing & Selection Results", 0, 1, 'L', fill=True)
+    
+    # Print Results Data manually to handle positioning
+    pdf.set_font("Arial", size=9)
+    pdf.ln(1)
+    keys = list(results_data.keys())
+    for i in range(0, len(keys), 2):
+        pdf.set_x(10) # Reset margin
+        k1 = keys[i]
+        v1 = str(results_data[k1])
+        pdf.cell(45, 6, f"{k1}:", 0, 0)
+        pdf.cell(50, 6, v1, 0, 0)
+        if i + 1 < len(keys):
+            k2 = keys[i+1]
+            v2 = str(results_data[k2])
+            pdf.cell(45, 6, f"{k2}:", 0, 0)
+            pdf.cell(50, 6, v2, 0, 1)
+        pdf.ln(6)
+    
     return pdf.output(dest='S').encode('latin-1')
 
+# --- Property Lookup ---
 def get_fluid_properties(fluid_name, T_kelvin, P_kpaa):
     if not COOLPROP_AVAILABLE: return {"error": "No Lib"}
     try:
@@ -107,11 +154,13 @@ def get_fluid_properties(fluid_name, T_kelvin, P_kpaa):
 # ==========================================
 st.title("🛡️ SGM Valves - Sizing Pro")
 
+# --- 1. Project Info ---
 st.sidebar.header("1. Project Details")
 customer = st.sidebar.text_input("Customer Name", "SGM Client")
 tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
 desc = st.sidebar.text_input("Description", "Separator Relief")
 
+# --- 2. Fluid ---
 st.sidebar.markdown("---")
 st.sidebar.header("2. Fluid Selection")
 service_type = st.sidebar.selectbox("Service Type", ["Gas/Vapor", "Liquid"])
@@ -119,6 +168,7 @@ fluids = ["Custom (Manual Input)", "Water", "Air", "Nitrogen", "Oxygen", "CO2", 
 if not COOLPROP_AVAILABLE: fluids = ["Custom (Manual Input)"]
 selected_fluid = st.sidebar.selectbox("Select Fluid", fluids)
 
+# --- 3. Process ---
 st.sidebar.markdown("---")
 st.sidebar.header("3. Process Conditions")
 def input_w_unit(lbl, def_val, units, k):
@@ -130,11 +180,13 @@ raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, ["barg", "psig", "kPag"], "
 raw_P2, unit_P2 = input_w_unit("Back Pressure", 0.0, ["barg", "psig", "kPag"], "p2")
 raw_T1, unit_T1 = input_w_unit("Temperature", 150.0, ["°C", "°F", "K"], "t1")
 
+# --- 4. Valve Factors ---
 with st.sidebar.expander("4. Coefficients (Kd, Kb, Kc)"):
     Kd = st.number_input("Kd (Discharge)", value=0.975 if service_type=="Gas/Vapor" else 0.65)
     Kb = st.number_input("Kb (Back Pres Factor)", value=1.0)
     Kc = st.number_input("Kc (Rupture Disc)", value=1.0)
     Kv = st.number_input("Kv (Viscosity)", value=1.0)
+
 # --- 5. MECHANICAL CONSTRUCTION ---
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical Construction")
@@ -159,101 +211,12 @@ conn_type = st.sidebar.selectbox("Connection Type", ["RF Flange", "RTJ Flange", 
 # ==========================================
 # 4. CALCULATIONS
 # ==========================================
+# Normalize Units
 atm = 101.325
 W_base = raw_W * 0.453592 if unit_W == "lb/hr" else raw_W
 P1_abs = ((raw_P1 * 100) if unit_P1 == "barg" else (raw_P1 * 6.895) if unit_P1 == "psig" else raw_P1) + atm
 P2_abs = ((raw_P2 * 100) if unit_P2 == "barg" else (raw_P2 * 6.895) if unit_P2 == "psig" else raw_P2) + atm
 T_K = (raw_T1 + 273.15) if unit_T1 == "°C" else ((raw_T1 - 32) * 5/9 + 273.15) if unit_T1 == "°F" else raw_T1
 
-u_Mw, u_k, u_Z, u_SG, u_visc = 44.0, 1.3, 0.95, 1.0, 1.0
-
-if selected_fluid != "Custom (Manual Input)":
-    p = get_fluid_properties(selected_fluid, T_K, P1_abs)
-    if not p['error']: 
-        u_Mw, u_k, u_Z, u_SG, u_visc = p['Mw'], p['k'], p['Z'], p['rho']/1000, p['visc']
-    else: 
-        st.sidebar.error("Prop Error")
-
-if selected_fluid == "Custom (Manual Input)" or (str(u_Mw)=="44.0" and selected_fluid!="CO2"):
-    st.sidebar.warning("Using Manual Properties")
-    u_Mw = st.sidebar.number_input("MW", value=44.0)
-    u_k = st.sidebar.number_input("k", value=1.3, min_value=1.01)
-    u_Z = st.sidebar.number_input("Z", value=0.95)
-    u_SG = st.sidebar.number_input("SG", value=1.0)
-
-# ==========================================
-# 5. EXECUTION & OUTPUT
-# ==========================================
-st.markdown("### 📊 Sizing Dashboard")
-
-if st.button("🚀 Calculate & Generate Datasheet"):
-    try:
-        P1_sizing = (P1_abs - atm) * 1.10 + atm 
-        dP = P1_sizing - P2_abs
-        A_req = 0.0
-        
-        if service_type == "Gas/Vapor":
-            k_term = (u_k+1)/(u_k-1)
-            C = 520 * np.sqrt(u_k * ((2/(u_k+1))**k_term))
-            num = 13160 * W_base * np.sqrt((T_K * u_Z) / u_Mw)
-            den = C * Kd * P1_sizing * Kb * Kc
-            A_req = num / den
-        else:
-            Q_lpm = (W_base / u_SG) / 60
-            if dP <= 0: 
-                st.error("Back Pressure > Set Pressure!")
-                st.stop()
-            A_req = (11.78 * Q_lpm / (Kd * Kb * Kc * Kv)) * np.sqrt(u_SG / dP)
-
-        api_orifices = {'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
-        sel_orf = "N/A"
-        sel_area = 0
-        sel_letter = ""
-        
-        for l, a in api_orifices.items():
-            if a >= A_req:
-                sel_orf = f"{l} ({a} mm²)"
-                sel_area = a
-                sel_letter = l
-                break
-
-        size_str = "Custom"
-        if sel_letter in api_526_sizes:
-            in_s, out_s = api_526_sizes[sel_letter]
-            size_str = f"{in_s} x {out_s}"
-
-        c1, c2, c3 = st.columns(3)
-        c1.success(f"Required Area: **{A_req:.2f} mm²**")
-        c2.metric("Selected Orifice", sel_orf)
-        c3.metric("Valve Size (API 526)", size_str)
-
-        proj_d = {"Customer": customer, "Tag No": tag_no, "Description": desc, "Service": service_type}
-        proc_d = {
-            "Fluid": selected_fluid, "Required Flow": f"{raw_W} {unit_W}",
-            "Set Pressure": f"{raw_P1} {unit_P1}", "Back Pressure": f"{raw_P2} {unit_P2}",
-            "Relieving Temp": f"{raw_T1} {unit_T1}", "Overpressure": "10% Accumulation"
-        }
-        prop_d = {
-            "MW": f"{u_Mw:.2f}", "k (Cp/Cv)": f"{u_k:.3f}", "Z Factor": f"{u_Z:.3f}",
-            "Specific Gravity": f"{u_SG:.3f}", "Viscosity": f"{u_visc:.3f} cP" if service_type=="Liquid" else "N/A",
-            "Kd": f"{Kd}", "Kb": f"{Kb}", "Kc": f"{Kc}"
-        }
-        mech_d = {
-            "Valve Size": size_str, "Orifice": sel_letter, "Body Material": body_mat,
-            "Nozzle Material": nozzle_mat, "Disc Material": disc_mat, "Spring Material": spring_mat,
-            "Bellows": "Yes" if bellows else "No", "Lever": lever_type,
-            "Inlet Conn": f"{inlet_rating} {conn_type}", "Outlet Conn": f"{outlet_rating} {conn_type}"
-        }
-        res_d = {
-            "Calculated Area": f"{A_req:.2f} mm²", "Selected Area": f"{sel_area} mm² ({sel_letter})",
-            "Sizing Basis": "API 520 Part I", "Valve Standard": "API 526"
-        }
-
-        pdf_data = create_datasheet(proj_d, proc_d, prop_d, mech_d, res_d)
-        st.download_button("📥 Download SGM Datasheet", pdf_data, f"{tag_no}_Datasheet.pdf", "application/pdf")
-        st.session_state.project_log.append({"Tag": tag_no, "Size": size_str, "Orifice": sel_letter, "Body": body_mat})
-
-    except Exception as e: st.error(f"Error: {e}")
-
-st.markdown("---")
-if st.session_state.project_log: st.dataframe(pd.DataFrame(st.session_state.project_log))
+# Props
+u_Mw, u_k, u_Z, u_SG, u_visc = 44.
