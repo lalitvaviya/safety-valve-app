@@ -1,51 +1,21 @@
-import streamlit as st
-import numpy as np
-import pandas as pd
-from fpdf import FPDF
-import time
-
-# --- 1. SAFE IMPORT (Prevents crash if CoolProp is missing) ---
-try:
-    import CoolProp.CoolProp as CP
-    COOLPROP_AVAILABLE = True
-except ImportError:
-    COOLPROP_AVAILABLE = False
-
-# ==========================================
-# 2. SETUP & HELPER FUNCTIONS
-# ==========================================
-st.set_page_config(page_title="SGM Valve Sizing", layout="wide", page_icon="🛡️")
-
-if 'project_log' not in st.session_state:
-    st.session_state.project_log = []
-
-# --- API 526 STANDARD SIZES (Orifice -> Typical Size) ---
-api_526_sizes = {
-    'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'),
-    'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'),
-    'K': ('3"', '4"'), 'L': ('3"', '4"'), 'M': ('4"', '6"'),
-    'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'),
-    'R': ('6"', '8"'), 'T': ('8"', '10"')
-}
-
 # --- PDF GENERATOR (With Watermark) ---
 def create_datasheet(project_data, process_data, valve_data, mech_data, results_data):
     class PDF(FPDF):
         def header(self):
             # --- 1. WATERMARK (Background) ---
-            # Using 'watermark.png' centered on the page
+            # We place this FIRST so it appears BEHIND everything else.
+            # We center it on the A4 page (Width 210mm, Height 297mm)
             try:
-                # x=45, y=80, width=120
-                self.image('watermark.png', x=45, y=80, w=120) 
+                # x=45, y=100, width=120 (Large centered image)
+                # Note: For a true "watermark" look, use a light/faded version of your logo
+                self.image('logo.png', x=45, y=80, w=120) 
             except:
-                pass # If watermark file is missing, just skip it
+                pass 
 
             # --- 2. HEADER LOGO (Top Left) ---
-            # Using 'logo.png' for the sharp company logo
             try:
                 self.image('logo.png', 10, 8, 33) 
-            except: 
-                pass 
+            except: pass 
 
             # --- 3. HEADER TEXT ---
             self.set_y(10)
@@ -71,13 +41,17 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
     pdf = PDF()
     pdf.add_page()
     
-    # Helper to print sections
+    # Helper to print sections (Added transparency safety)
     def print_section(title, data_dict):
         pdf.set_font("Arial", 'B', 11)
+        # Light Gray background for headers
         pdf.set_fill_color(230, 230, 230)
         pdf.cell(0, 7, title, 0, 1, 'L', fill=True)
         pdf.ln(1)
         pdf.set_font("Arial", size=9)
+        
+        # We ensure background is white for text so it's readable over watermark
+        # (Optional: remove fill=False if you want transparent text box)
         
         keys = list(data_dict.keys())
         for i in range(0, len(keys), 2):
@@ -101,23 +75,24 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
     print_section("3. Fluid Properties & Coefficients", valve_data)
     print_section("4. Mechanical Construction", mech_data)
     
-    # Results Box (White filled to ensure readability over watermark)
+    # Results Box
     pdf.ln(2)
-    pdf.set_fill_color(255, 255, 255) 
-    pdf.set_draw_color(0, 51, 102) # Blue border
+    pdf.set_fill_color(255, 255, 255) # White background for results to pop out
+    pdf.set_draw_color(0, 51, 102) 
     pdf.set_line_width(0.4)
     current_y = pdf.get_y()
-    pdf.rect(10, current_y, 190, 25, 'DF') # DF = Draw & Fill
+    pdf.rect(10, current_y, 190, 25, 'DF') # 'DF' = Draw and Fill white (covers watermark)
     
-    # Manually print title inside box
+    # Reset text position inside the box
     pdf.set_xy(10, current_y)
+    # Re-print title inside box manually to handle the fill
     pdf.set_font("Arial", 'B', 11)
     pdf.set_fill_color(230, 230, 230)
     pdf.cell(190, 7, "5. Sizing & Selection Results", 0, 1, 'L', fill=True)
     
-    # Print Results Data manually to handle positioning
     pdf.set_font("Arial", size=9)
     pdf.ln(1)
+    # Print results data
     keys = list(results_data.keys())
     for i in range(0, len(keys), 2):
         pdf.set_x(10) # Reset margin
@@ -133,90 +108,3 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
         pdf.ln(6)
     
     return pdf.output(dest='S').encode('latin-1')
-
-# --- Property Lookup ---
-def get_fluid_properties(fluid_name, T_kelvin, P_kpaa):
-    if not COOLPROP_AVAILABLE: return {"error": "No Lib"}
-    try:
-        P_pa = P_kpaa * 1000
-        rho = CP.PropsSI('D', 'T', T_kelvin, 'P', P_pa, fluid_name)
-        Z = CP.PropsSI('Z', 'T', T_kelvin, 'P', P_pa, fluid_name)
-        mw = CP.PropsSI('M', 'T', T_kelvin, 'P', P_pa, fluid_name) * 1000
-        try: cp = CP.PropsSI('Cpmass', 'T', T_kelvin, 'P', P_pa, fluid_name); cv = CP.PropsSI('Cvmass', 'T', T_kelvin, 'P', P_pa, fluid_name); k = cp/cv
-        except: k = 1.01 
-        try: visc = CP.PropsSI('V', 'T', T_kelvin, 'P', P_pa, fluid_name) * 1000
-        except: visc = 0.0
-        return {"rho": rho, "Z": Z, "k": k, "Mw": mw, "visc": visc, "error": None}
-    except Exception as e: return {"error": str(e)}
-
-# ==========================================
-# 3. SIDEBAR INPUTS
-# ==========================================
-st.title("🛡️ SGM Valves - Sizing Pro")
-
-# --- 1. Project Info ---
-st.sidebar.header("1. Project Details")
-customer = st.sidebar.text_input("Customer Name", "SGM Client")
-tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
-desc = st.sidebar.text_input("Description", "Separator Relief")
-
-# --- 2. Fluid ---
-st.sidebar.markdown("---")
-st.sidebar.header("2. Fluid Selection")
-service_type = st.sidebar.selectbox("Service Type", ["Gas/Vapor", "Liquid"])
-fluids = ["Custom (Manual Input)", "Water", "Air", "Nitrogen", "Oxygen", "CO2", "Methane", "Propane", "Steam"]
-if not COOLPROP_AVAILABLE: fluids = ["Custom (Manual Input)"]
-selected_fluid = st.sidebar.selectbox("Select Fluid", fluids)
-
-# --- 3. Process ---
-st.sidebar.markdown("---")
-st.sidebar.header("3. Process Conditions")
-def input_w_unit(lbl, def_val, units, k):
-    c1, c2 = st.sidebar.columns([2,1])
-    return c1.number_input(lbl, value=def_val, key=k+"_v"), c2.selectbox("U", units, key=k+"_u")
-
-raw_W, unit_W = input_w_unit("Flow Rate", 1000.0, ["kg/hr", "lb/hr"], "w")
-raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, ["barg", "psig", "kPag"], "p1")
-raw_P2, unit_P2 = input_w_unit("Back Pressure", 0.0, ["barg", "psig", "kPag"], "p2")
-raw_T1, unit_T1 = input_w_unit("Temperature", 150.0, ["°C", "°F", "K"], "t1")
-
-# --- 4. Valve Factors ---
-with st.sidebar.expander("4. Coefficients (Kd, Kb, Kc)"):
-    Kd = st.number_input("Kd (Discharge)", value=0.975 if service_type=="Gas/Vapor" else 0.65)
-    Kb = st.number_input("Kb (Back Pres Factor)", value=1.0)
-    Kc = st.number_input("Kc (Rupture Disc)", value=1.0)
-    Kv = st.number_input("Kv (Viscosity)", value=1.0)
-
-# --- 5. MECHANICAL CONSTRUCTION ---
-st.sidebar.markdown("---")
-st.sidebar.header("5. Mechanical Construction")
-
-c_m1, c_m2 = st.sidebar.columns(2)
-body_mat = c_m1.text_input("Body Material", "WCB")
-nozzle_mat = c_m2.text_input("Nozzle Material", "SS316")
-
-c_m3, c_m4 = st.sidebar.columns(2)
-disc_mat = c_m3.text_input("Disc Material", "SS316")
-spring_mat = c_m4.text_input("Spring Material", "Inconel X750")
-
-lever_type = st.sidebar.selectbox("Lever Type", ["None", "Packed Lever", "Plain Lever", "Open Lever"])
-bellows = st.sidebar.checkbox("Bellows Required?", False)
-
-st.sidebar.subheader("End Connections")
-c_conn1, c_conn2 = st.sidebar.columns(2)
-inlet_rating = c_conn1.selectbox("Inlet Rating", ["150#", "300#", "600#", "900#", "1500#", "2500#"], index=1)
-outlet_rating = c_conn2.selectbox("Outlet Rating", ["150#", "300#", "150#"], index=0)
-conn_type = st.sidebar.selectbox("Connection Type", ["RF Flange", "RTJ Flange", "NPT Threaded"])
-
-# ==========================================
-# 4. CALCULATIONS
-# ==========================================
-# Normalize Units
-atm = 101.325
-W_base = raw_W * 0.453592 if unit_W == "lb/hr" else raw_W
-P1_abs = ((raw_P1 * 100) if unit_P1 == "barg" else (raw_P1 * 6.895) if unit_P1 == "psig" else raw_P1) + atm
-P2_abs = ((raw_P2 * 100) if unit_P2 == "barg" else (raw_P2 * 6.895) if unit_P2 == "psig" else raw_P2) + atm
-T_K = (raw_T1 + 273.15) if unit_T1 == "°C" else ((raw_T1 - 32) * 5/9 + 273.15) if unit_T1 == "°F" else raw_T1
-
-# Props
-u_Mw, u_k, u_Z, u_SG, u_visc = 44.0, 1.3, 0.95, 1.0, 1.0
