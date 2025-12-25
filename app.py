@@ -26,7 +26,6 @@ api_526_sizes = {
     'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'),
     'R': ('6"', '8"'), 'T': ('8"', '10"')
 }
-
 # --- PDF GENERATOR ---
 def create_datasheet(project_data, process_data, valve_data, mech_data, results_data):
     class PDF(FPDF):
@@ -101,7 +100,6 @@ def get_fluid_properties(fluid_name, T_kelvin, P_kpaa):
         except: visc = 0.0
         return {"rho": rho, "Z": Z, "k": k, "Mw": mw, "visc": visc, "error": None}
     except Exception as e: return {"error": str(e)}
-
 # ==========================================
 # 3. SIDEBAR INPUTS
 # ==========================================
@@ -135,7 +133,7 @@ with st.sidebar.expander("4. Coefficients (Kd, Kb, Kc)"):
     Kb = st.number_input("Kb (Back Pres Factor)", value=1.0)
     Kc = st.number_input("Kc (Rupture Disc)", value=1.0)
     Kv = st.number_input("Kv (Viscosity)", value=1.0)
-    # --- 5. MECHANICAL CONSTRUCTION ---
+# --- 5. MECHANICAL CONSTRUCTION ---
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical Construction")
 
