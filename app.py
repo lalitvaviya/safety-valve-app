@@ -219,4 +219,4 @@ P2_abs = ((raw_P2 * 100) if unit_P2 == "barg" else (raw_P2 * 6.895) if unit_P2 =
 T_K = (raw_T1 + 273.15) if unit_T1 == "°C" else ((raw_T1 - 32) * 5/9 + 273.15) if unit_T1 == "°F" else raw_T1
 
 # Props
-u_Mw, u_k, u_Z, u_SG, u_visc = 44.
+u_Mw, u_k, u_Z, u_SG, u_visc = 44.0, 1.3, 0.95, 1.0, 1.0
