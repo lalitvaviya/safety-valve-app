@@ -19,6 +19,11 @@ st.set_page_config(page_title="SGM Valve Sizing", layout="wide", page_icon="🛡
 if 'project_log' not in st.session_state:
     st.session_state.project_log = []
 
+# --- FLANGE RATING LIMITS (ASME B16.5 Group 1.1 Carbon Steel approx) ---
+flange_limits_barg = {
+    "150#": 19.6, "300#": 51.1, "600#": 102.1, "900#": 153.2, "1500#": 255.3, "2500#": 425.5
+}
+
 # --- API 526 STANDARD SIZES ---
 api_526_sizes = {
     'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'),
@@ -103,39 +108,26 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
     print_section("4. Mechanical Construction", mech_data)
     
     pdf.ln(2)
-    
-    # --- BOX MODIFICATION HERE ---
-    # We use 'F' (Fill) only, NO border line.
-    # Height increased to 45 to ensure formula fits.
-    pdf.set_fill_color(255, 255, 255) # White background
+    pdf.set_fill_color(255, 255, 255)
     current_y = pdf.get_y()
     pdf.rect(10, current_y, 190, 45, 'F') 
-    
     pdf.set_xy(10, current_y)
     pdf.set_font("Arial", 'B', 11)
-    pdf.set_fill_color(230, 230, 230) # Gray Header
+    pdf.set_fill_color(230, 230, 230)
     pdf.cell(190, 7, "5. Sizing & Selection Results", 0, 1, 'L', fill=True)
     pdf.set_font("Arial", size=9)
     pdf.ln(1)
     
     keys = list(results_data.keys())
-    
     for k in keys:
         v = str(results_data[k])
         pdf.set_x(10)
         pdf.cell(45, 6, f"{k}:", 0, 0)
-        
-        # Special handling for Formula to ensure it fits and wraps if needed
         if k == "Formula Used":
             pdf.set_font("Arial", 'I', 8)
-            # Use multi_cell for formula to prevent cutoff if it's too long
-            # Store current x, y to handle flow
-            x_curr = pdf.get_x()
-            y_curr = pdf.get_y()
             pdf.multi_cell(140, 6, v, 0, 'L')
         else:
             pdf.cell(140, 6, v, 0, 1)
-
     return pdf.output(dest='S').encode('latin-1')
 
 def get_fluid_properties(fluid_name, T_kelvin, P_kpaa, quality_x=None, service="Gas/Vapor"):
@@ -170,6 +162,7 @@ st.sidebar.header("1. Project Details")
 customer = st.sidebar.text_input("Customer Name", "SGM Client")
 tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
 desc = st.sidebar.text_input("Description", "Separator Relief")
+offer_no = st.sidebar.text_input("Offer No", "25260001ABC")
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Fluid Selection")
@@ -193,12 +186,34 @@ raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, press_units, "p1")
 raw_P2, unit_P2 = input_w_unit("Back Pressure", 0.0, press_units, "p2")
 raw_T1, unit_T1 = input_w_unit("Temperature", 150.0, ["°C", "°F", "K"], "t1")
 
+# --- BELLOWS LOGIC ---
+p1_bar_val = 0.0
+p2_bar_val = 0.0
+if unit_P1 == "barg": p1_bar_val = raw_P1
+elif unit_P1 == "psig": p1_bar_val = raw_P1 * 0.0689
+elif unit_P1 == "kg/cm2g": p1_bar_val = raw_P1 * 0.98
+elif unit_P1 == "kPag": p1_bar_val = raw_P1 / 100
+
+if unit_P2 == "barg": p2_bar_val = raw_P2
+elif unit_P2 == "psig": p2_bar_val = raw_P2 * 0.0689
+elif unit_P2 == "kg/cm2g": p2_bar_val = raw_P2 * 0.98
+elif unit_P2 == "kPag": p2_bar_val = raw_P2 / 100
+
+back_pressure_ratio = 0.0
+if p1_bar_val > 0:
+    back_pressure_ratio = (p2_bar_val / p1_bar_val) * 100
+
+bellows_recommended = False
+if back_pressure_ratio > 10:
+    bellows_recommended = True
+    st.sidebar.warning(f"⚠️ Back Pressure is {back_pressure_ratio:.1f}% (>10%). Bellows Recommended!")
+
 input_quality = 0.0
 omega_manual = 1.0
 rho_inlet_manual = 1000.0
 
 if service_type == "Two-Phase":
-    st.sidebar.markdown("**Two-Phase Properties (Omega Method)**")
+    st.sidebar.markdown("**Two-Phase Properties**")
     input_quality = st.sidebar.number_input("Vapor Mass Fraction (Quality x)", value=0.1, min_value=0.0, max_value=1.0)
     if selected_fluid == "Custom (Manual Input)":
         omega_manual = st.sidebar.number_input("Omega Parameter (w)", value=1.0)
@@ -237,6 +252,12 @@ st.sidebar.subheader("End Connections")
 if valve_standard == "API 526 (Flanged)":
     c_conn1, c_conn2 = st.sidebar.columns(2)
     inlet_rating = c_conn1.selectbox("Inlet Rating", ["150#", "300#", "600#", "900#", "1500#", "2500#"], index=1)
+    
+    if inlet_rating in flange_limits_barg:
+        limit = flange_limits_barg[inlet_rating]
+        if p1_bar_val > limit:
+            st.sidebar.error(f"🚨 Set Pressure ({p1_bar_val:.1f} bar) exceeds {inlet_rating} rating limit (~{limit} bar)!")
+    
     outlet_rating = c_conn2.selectbox("Outlet Rating", ["150#", "300#", "150#"], index=0)
     conn_type = st.sidebar.selectbox("Connection Type", ["RF Flange", "RTJ Flange"])
     inlet_str = f"{inlet_rating} {conn_type}"
@@ -250,8 +271,14 @@ else:
     inlet_str = f"{sel_inlet_sz} {conn_type.split(' ')[0]}"
     outlet_str = f"{sel_outlet_sz} {conn_type.split(' ')[0]}"
 
+# --- ADDED: Centre to Face Inputs ---
+st.sidebar.subheader("Dimensions")
+c_dim1, c_dim2 = st.sidebar.columns(2)
+c_face_inlet = c_dim1.number_input("C-to-Face Inlet (mm)", value=0)
+c_face_outlet = c_dim2.number_input("C-to-Face Outlet (mm)", value=0)
+
 lever_type = st.sidebar.selectbox("Lever Type", ["None", "Packed Lever", "Plain Lever", "Open Lever"])
-bellows = st.sidebar.checkbox("Bellows Required?", False)
+bellows = st.sidebar.checkbox("Bellows Required?", value=False)
 
 # ==========================================
 # 4. CALCULATIONS
@@ -310,6 +337,9 @@ st.markdown("### 📊 Sizing Dashboard")
 
 if st.button("🚀 Calculate & Generate Datasheet"):
     try:
+        if bellows_recommended and not bellows:
+            st.warning("⚠️ WARNING: Back Pressure > 10% but 'Bellows Required' is NOT checked in Mechanical Construction.")
+
         P1_sizing = (P1_abs - atm) * 1.10 + atm 
         dP = P1_sizing - P2_abs
         A_req = 0.0
@@ -350,7 +380,7 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             if A_req < 0: A_req = 1.0
             formula_used = "A = W / (G_flux * Kd * Kb * Kc * 0.9)"
 
-        api_orifices = {'B': 39, 'C': 57, 'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
+        api_orifices = {'B': 39, 'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
         sel_orf = "N/A"
         sel_area = 0
         sel_letter = ""
@@ -381,7 +411,23 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         if service_type == "Two-Phase": prop_d = {"Quality (x)": f"{input_quality}", "Omega (w)": f"{u_omega:.3f}", "Inlet Density": f"{u_rho:.1f} kg/m3"}
         else: prop_d = {"MW": f"{u_Mw:.2f}", "k (Cp/Cv)": f"{u_k:.3f}", "Z Factor": f"{u_Z:.3f}", "Specific Gravity": f"{u_SG:.3f}", "Viscosity": f"{u_visc:.3f} cP" if service_type=="Liquid" else "N/A"}
         prop_d.update({"Kd": f"{Kd}", "Kb": f"{Kb}", "Kc": f"{Kc}"})
-        mech_d = {"Type": valve_standard, "Valve Size": size_str, "Orifice": sel_letter, "Body Material": body_mat, "Nozzle Material": nozzle_mat, "Disc Material": disc_mat, "Spring Material": spring_mat, "Bellows": "Yes" if bellows else "No", "Lever": lever_type, "Inlet Conn": inlet_str, "Outlet Conn": outlet_str}
+        
+        # --- ADDED C-to-F to Mechanical Data ---
+        mech_d = {
+            "Type": valve_standard, 
+            "Valve Size": size_str, 
+            "Orifice": sel_letter, 
+            "Body Material": body_mat, 
+            "Nozzle Material": nozzle_mat, 
+            "Disc Material": disc_mat, 
+            "Spring Material": spring_mat, 
+            "Bellows": "Yes" if bellows else "No", 
+            "Lever": lever_type, 
+            "Inlet Conn": inlet_str, 
+            "Outlet Conn": outlet_str,
+            "Center to Face (Inlet)": f"{c_face_inlet} mm",
+            "Center to Face (Outlet)": f"{c_face_outlet} mm"
+        }
         
         res_d = {
             "Calculated Area": f"{A_req:.2f} mm²", 
