@@ -26,18 +26,24 @@ api_526_sizes = {
     'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'),
     'R': ('6"', '8"'), 'T': ('8"', '10"')
 }
+
 # --- PDF GENERATOR ---
 def create_datasheet(project_data, process_data, valve_data, mech_data, results_data):
     class PDF(FPDF):
         def header(self):
+            try: self.image('watermark.png', x=45, y=80, w=120) 
+            except: pass 
             try: self.image('logo.png', 10, 8, 33) 
             except: pass 
+
             self.set_y(10)
             self.set_font('Arial', 'B', 16)
-            self.cell(0, 10, 'Safety Valve Datasheet (API 526)', 0, 1, 'C')
+            self.cell(0, 10, 'Safety Valve Datasheet', 0, 1, 'C')
+            
             self.set_font('Arial', 'B', 12)
             self.set_text_color(0, 51, 102)
             self.cell(0, 8, 'SGM Valves and System Pvt Ltd', 0, 1, 'C')
+            
             self.set_text_color(0, 0, 0)
             self.ln(5)
             self.set_line_width(0.5)
@@ -83,8 +89,28 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
     pdf.set_draw_color(0, 51, 102)
     pdf.set_line_width(0.4)
     current_y = pdf.get_y()
-    pdf.rect(10, current_y, 190, 25) 
-    print_section("5. Sizing & Selection Results", results_data)
+    pdf.rect(10, current_y, 190, 25, 'DF')
+    
+    pdf.set_xy(10, current_y)
+    pdf.set_font("Arial", 'B', 11)
+    pdf.set_fill_color(230, 230, 230)
+    pdf.cell(190, 7, "5. Sizing & Selection Results", 0, 1, 'L', fill=True)
+    
+    pdf.set_font("Arial", size=9)
+    pdf.ln(1)
+    keys = list(results_data.keys())
+    for i in range(0, len(keys), 2):
+        pdf.set_x(10)
+        k1 = keys[i]
+        v1 = str(results_data[k1])
+        pdf.cell(45, 6, f"{k1}:", 0, 0)
+        pdf.cell(50, 6, v1, 0, 0)
+        if i + 1 < len(keys):
+            k2 = keys[i+1]
+            v2 = str(results_data[k2])
+            pdf.cell(45, 6, f"{k2}:", 0, 0)
+            pdf.cell(50, 6, v2, 0, 1)
+        pdf.ln(6)
     return pdf.output(dest='S').encode('latin-1')
 
 def get_fluid_properties(fluid_name, T_kelvin, P_kpaa):
@@ -100,6 +126,7 @@ def get_fluid_properties(fluid_name, T_kelvin, P_kpaa):
         except: visc = 0.0
         return {"rho": rho, "Z": Z, "k": k, "Mw": mw, "visc": visc, "error": None}
     except Exception as e: return {"error": str(e)}
+
 # ==========================================
 # 3. SIDEBAR INPUTS
 # ==========================================
@@ -119,13 +146,18 @@ selected_fluid = st.sidebar.selectbox("Select Fluid", fluids)
 
 st.sidebar.markdown("---")
 st.sidebar.header("3. Process Conditions")
+
+# Units
+flow_units = ["kg/hr", "lb/hr", "Nm3/hr", "LPM", "m3/hr", "LPH"]
 def input_w_unit(lbl, def_val, units, k):
     c1, c2 = st.sidebar.columns([2,1])
     return c1.number_input(lbl, value=def_val, key=k+"_v"), c2.selectbox("U", units, key=k+"_u")
 
-raw_W, unit_W = input_w_unit("Flow Rate", 1000.0, ["kg/hr", "lb/hr"], "w")
-raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, ["barg", "psig", "kPag"], "p1")
-raw_P2, unit_P2 = input_w_unit("Back Pressure", 0.0, ["barg", "psig", "kPag"], "p2")
+raw_W, unit_W = input_w_unit("Flow Rate", 1000.0, flow_units, "w")
+
+press_units = ["barg", "psig", "kPag", "kg/cm2g"]
+raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, press_units, "p1")
+raw_P2, unit_P2 = input_w_unit("Back Pressure", 0.0, press_units, "p2")
 raw_T1, unit_T1 = input_w_unit("Temperature", 150.0, ["°C", "°F", "K"], "t1")
 
 with st.sidebar.expander("4. Coefficients (Kd, Kb, Kc)"):
@@ -133,44 +165,77 @@ with st.sidebar.expander("4. Coefficients (Kd, Kb, Kc)"):
     Kb = st.number_input("Kb (Back Pres Factor)", value=1.0)
     Kc = st.number_input("Kc (Rupture Disc)", value=1.0)
     Kv = st.number_input("Kv (Viscosity)", value=1.0)
+
 # --- 5. MECHANICAL CONSTRUCTION ---
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical Construction")
 
+# --- MOVED UP HERE FOR VISIBILITY ---
+valve_standard = st.sidebar.radio("Select Valve Standard", ["API 526 (Flanged)", "Non-API / Compact (Threaded)"])
+st.sidebar.markdown("---")
+
 c_m1, c_m2 = st.sidebar.columns(2)
 body_mat = c_m1.text_input("Body Material", "WCB")
 nozzle_mat = c_m2.text_input("Nozzle Material", "SS316")
-
 c_m3, c_m4 = st.sidebar.columns(2)
 disc_mat = c_m3.text_input("Disc Material", "SS316")
 spring_mat = c_m4.text_input("Spring Material", "Inconel X750")
 
-lever_type = st.sidebar.selectbox("Lever Type", ["None", "Packed Lever", "Plain Lever", "Open Lever"])
-bellows = st.sidebar.checkbox("Bellows Required?", False)
+# Logic for End Connections
+inlet_str = "N/A"
+outlet_str = "N/A"
+sel_inlet_sz = "" # Safety init
+sel_outlet_sz = "" # Safety init
 
 st.sidebar.subheader("End Connections")
-c_conn1, c_conn2 = st.sidebar.columns(2)
-inlet_rating = c_conn1.selectbox("Inlet Rating", ["150#", "300#", "600#", "900#", "1500#", "2500#"], index=1)
-outlet_rating = c_conn2.selectbox("Outlet Rating", ["150#", "300#", "150#"], index=0)
-conn_type = st.sidebar.selectbox("Connection Type", ["RF Flange", "RTJ Flange", "NPT Threaded"])
+
+if valve_standard == "API 526 (Flanged)":
+    # Standard API Ratings
+    c_conn1, c_conn2 = st.sidebar.columns(2)
+    inlet_rating = c_conn1.selectbox("Inlet Rating", ["150#", "300#", "600#", "900#", "1500#", "2500#"], index=1)
+    outlet_rating = c_conn2.selectbox("Outlet Rating", ["150#", "300#", "150#"], index=0)
+    conn_type = st.sidebar.selectbox("Connection Type", ["RF Flange", "RTJ Flange"])
+    inlet_str = f"{inlet_rating} {conn_type}"
+    outlet_str = f"{outlet_rating} {conn_type}"
+else:
+    # Non-API / Threaded
+    c_sz1, c_sz2 = st.sidebar.columns(2)
+    size_options = ["1/2\"", "3/4\"", "1\"", "1 1/2\"", "2\""]
+    
+    sel_inlet_sz = c_sz1.selectbox("Inlet Size", size_options, index=0)
+    sel_outlet_sz = c_sz2.selectbox("Outlet Size", size_options, index=1)
+    
+    conn_type = st.sidebar.selectbox("Connection Type", ["NPT (Male x Female)", "NPT (Female x Female)", "BSP", "Socket Weld"])
+    
+    # Clean string construction
+    inlet_str = f"{sel_inlet_sz} {conn_type.split(' ')[0]}"
+    outlet_str = f"{sel_outlet_sz} {conn_type.split(' ')[0]}"
+
+lever_type = st.sidebar.selectbox("Lever Type", ["None", "Packed Lever", "Plain Lever", "Open Lever"])
+bellows = st.sidebar.checkbox("Bellows Required?", False)
 
 # ==========================================
 # 4. CALCULATIONS
 # ==========================================
 atm = 101.325
-W_base = raw_W * 0.453592 if unit_W == "lb/hr" else raw_W
-P1_abs = ((raw_P1 * 100) if unit_P1 == "barg" else (raw_P1 * 6.895) if unit_P1 == "psig" else raw_P1) + atm
-P2_abs = ((raw_P2 * 100) if unit_P2 == "barg" else (raw_P2 * 6.895) if unit_P2 == "psig" else raw_P2) + atm
+
+def to_kpa_abs(raw, unit):
+    if unit == "barg": return (raw * 100) + atm
+    if unit == "psig": return (raw * 6.89476) + atm
+    if unit == "kg/cm2g": return (raw * 98.0665) + atm
+    if unit == "kPag": return raw + atm
+    return raw
+
+P1_abs = to_kpa_abs(raw_P1, unit_P1)
+P2_abs = to_kpa_abs(raw_P2, unit_P2)
 T_K = (raw_T1 + 273.15) if unit_T1 == "°C" else ((raw_T1 - 32) * 5/9 + 273.15) if unit_T1 == "°F" else raw_T1
 
 u_Mw, u_k, u_Z, u_SG, u_visc = 44.0, 1.3, 0.95, 1.0, 1.0
 
 if selected_fluid != "Custom (Manual Input)":
     p = get_fluid_properties(selected_fluid, T_K, P1_abs)
-    if not p['error']: 
-        u_Mw, u_k, u_Z, u_SG, u_visc = p['Mw'], p['k'], p['Z'], p['rho']/1000, p['visc']
-    else: 
-        st.sidebar.error("Prop Error")
+    if not p['error']: u_Mw, u_k, u_Z, u_SG, u_visc = p['Mw'], p['k'], p['Z'], p['rho']/1000, p['visc']
+    else: st.sidebar.error("Prop Error")
 
 if selected_fluid == "Custom (Manual Input)" or (str(u_Mw)=="44.0" and selected_fluid!="CO2"):
     st.sidebar.warning("Using Manual Properties")
@@ -178,6 +243,14 @@ if selected_fluid == "Custom (Manual Input)" or (str(u_Mw)=="44.0" and selected_
     u_k = st.sidebar.number_input("k", value=1.3, min_value=1.01)
     u_Z = st.sidebar.number_input("Z", value=0.95)
     u_SG = st.sidebar.number_input("SG", value=1.0)
+
+W_base = 0.0
+if unit_W == "kg/hr": W_base = raw_W
+elif unit_W == "lb/hr": W_base = raw_W * 0.453592
+elif unit_W == "Nm3/hr": W_base = (raw_W / 22.414) * u_Mw if u_Mw > 0 else 0
+elif unit_W == "LPM": W_base = (raw_W * 0.06 / 22.414) * u_Mw if u_Mw > 0 else 0
+elif unit_W == "m3/hr": W_base = raw_W * 1000 * u_SG
+elif unit_W == "LPH": W_base = raw_W * u_SG
 
 # ==========================================
 # 5. EXECUTION & OUTPUT
@@ -190,6 +263,9 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         dP = P1_sizing - P2_abs
         A_req = 0.0
         
+        if service_type == "Gas/Vapor" and unit_W in ["m3/hr", "LPH"]: st.warning(f"⚠️ Check units!")
+        if service_type == "Liquid" and unit_W in ["Nm3/hr", "LPM"]: st.warning(f"⚠️ Check units!")
+
         if service_type == "Gas/Vapor":
             k_term = (u_k+1)/(u_k-1)
             C = 520 * np.sqrt(u_k * ((2/(u_k+1))**k_term))
@@ -198,16 +274,19 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             A_req = num / den
         else:
             Q_lpm = (W_base / u_SG) / 60
-            if dP <= 0: 
-                st.error("Back Pressure > Set Pressure!")
-                st.stop()
+            if dP <= 0: st.error("Back Pres > Set Pres!"); st.stop()
             A_req = (11.78 * Q_lpm / (Kd * Kb * Kc * Kv)) * np.sqrt(u_SG / dP)
 
-        api_orifices = {'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
+        api_orifices = {
+            'B': 39, 'C': 57, 
+            'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 
+            'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 
+            'Q': 7129, 'R': 10323, 'T': 16774
+        }
+        
         sel_orf = "N/A"
         sel_area = 0
         sel_letter = ""
-        
         for l, a in api_orifices.items():
             if a >= A_req:
                 sel_orf = f"{l} ({a} mm²)"
@@ -216,15 +295,23 @@ if st.button("🚀 Calculate & Generate Datasheet"):
                 break
 
         size_str = "Custom"
-        if sel_letter in api_526_sizes:
-            in_s, out_s = api_526_sizes[sel_letter]
-            size_str = f"{in_s} x {out_s}"
+        
+        if valve_standard == "API 526 (Flanged)":
+            if sel_letter in api_526_sizes:
+                in_s, out_s = api_526_sizes[sel_letter]
+                size_str = f"{in_s} x {out_s}"
+            else:
+                size_str = "Check API Std"
+        else:
+            # Non-API: Use user inputs
+            size_str = f"{sel_inlet_sz} x {sel_outlet_sz}"
 
         c1, c2, c3 = st.columns(3)
         c1.success(f"Required Area: **{A_req:.2f} mm²**")
         c2.metric("Selected Orifice", sel_orf)
-        c3.metric("Valve Size (API 526)", size_str)
+        c3.metric("Valve Size", size_str)
 
+        # PDF Data
         proj_d = {"Customer": customer, "Tag No": tag_no, "Description": desc, "Service": service_type}
         proc_d = {
             "Fluid": selected_fluid, "Required Flow": f"{raw_W} {unit_W}",
@@ -237,14 +324,16 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             "Kd": f"{Kd}", "Kb": f"{Kb}", "Kc": f"{Kc}"
         }
         mech_d = {
-            "Valve Size": size_str, "Orifice": sel_letter, "Body Material": body_mat,
-            "Nozzle Material": nozzle_mat, "Disc Material": disc_mat, "Spring Material": spring_mat,
+            "Type": valve_standard,
+            "Valve Size": size_str, "Orifice": sel_letter, 
+            "Body Material": body_mat, "Nozzle Material": nozzle_mat, 
+            "Disc Material": disc_mat, "Spring Material": spring_mat,
             "Bellows": "Yes" if bellows else "No", "Lever": lever_type,
-            "Inlet Conn": f"{inlet_rating} {conn_type}", "Outlet Conn": f"{outlet_rating} {conn_type}"
+            "Inlet Conn": inlet_str, "Outlet Conn": outlet_str
         }
         res_d = {
             "Calculated Area": f"{A_req:.2f} mm²", "Selected Area": f"{sel_area} mm² ({sel_letter})",
-            "Sizing Basis": "API 520 Part I", "Valve Standard": "API 526"
+            "Sizing Basis": "API 520 Part I", "Valve Standard": valve_standard
         }
 
         pdf_data = create_datasheet(proj_d, proc_d, prop_d, mech_d, res_d)
