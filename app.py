@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 from fpdf import FPDF
 import math
+import zipfile
+import io
 
 # --- 1. SAFE IMPORT ---
 try:
@@ -19,7 +21,7 @@ st.set_page_config(page_title="SGM Valve Sizing", layout="wide", page_icon="🛡
 if 'project_log' not in st.session_state:
     st.session_state.project_log = []
 
-# --- FLANGE RATING LIMITS (ASME B16.5 Group 1.1 Carbon Steel approx) ---
+# --- FLANGE RATING LIMITS (ASME B16.5 Group 1.1) ---
 flange_limits_barg = {
     "150#": 19.6, "300#": 51.1, "600#": 102.1, "900#": 153.2, "1500#": 255.3, "2500#": 425.5
 }
@@ -33,7 +35,31 @@ api_526_sizes = {
     'R': ('6"', '8"'), 'T': ('8"', '10"')
 }
 
-# --- CRITICAL PRESSURE RATIO SOLVER (For Omega Method) ---
+# --- API 526 CENTER-TO-FACE DIMENSIONS (mm) ---
+api_526_dims = {
+    ('D', '150#', '150#'): (105, 114), ('D', '300#', '150#'): (105, 114), ('D', '600#', '150#'): (105, 114),
+    ('D', '900#', '300#'): (140, 165), ('D', '1500#', '300#'): (140, 165),
+    ('E', '150#', '150#'): (105, 121), ('E', '300#', '150#'): (105, 121), ('E', '600#', '150#'): (105, 121),
+    ('E', '900#', '300#'): (140, 165), ('E', '1500#', '300#'): (140, 165),
+    ('F', '150#', '150#'): (124, 121), ('F', '300#', '150#'): (124, 121), ('F', '600#', '150#'): (124, 121),
+    ('G', '150#', '150#'): (124, 121), ('G', '300#', '150#'): (124, 121), ('G', '600#', '150#'): (124, 121),
+    ('H', '150#', '150#'): (130, 124), ('H', '300#', '150#'): (130, 124), ('H', '600#', '150#'): (130, 124),
+    ('J', '150#', '150#'): (137, 124), ('J', '300#', '150#'): (137, 124), ('J', '600#', '150#'): (137, 124),
+    ('K', '150#', '150#'): (156, 162), ('K', '300#', '150#'): (156, 162), ('K', '600#', '150#'): (156, 162),
+    ('L', '150#', '150#'): (156, 165), ('L', '300#', '150#'): (156, 165), ('L', '600#', '150#'): (156, 165),
+    ('M', '150#', '150#'): (181, 184), ('M', '300#', '150#'): (181, 184), ('M', '600#', '150#'): (181, 184),
+    ('N', '150#', '150#'): (197, 197), ('N', '300#', '150#'): (197, 197), ('N', '600#', '150#'): (197, 197),
+    ('P', '150#', '150#'): (181, 229), ('P', '300#', '150#'): (181, 229), ('P', '600#', '150#'): (181, 229),
+    ('Q', '150#', '150#'): (240, 241), ('Q', '300#', '150#'): (240, 241), ('Q', '600#', '150#'): (240, 241),
+    ('R', '150#', '150#'): (240, 267), ('R', '300#', '150#'): (240, 267), ('R', '600#', '150#'): (240, 267),
+    ('T', '150#', '150#'): (276, 279), ('T', '300#', '150#'): (276, 279),
+}
+
+def get_api_dimensions(letter, in_rate, out_rate):
+    key = (letter, in_rate, out_rate)
+    return api_526_dims.get(key, None)
+
+# --- CRITICAL PRESSURE RATIO SOLVER ---
 def calculate_eta_c(omega):
     if omega <= 0: return 1.0
     eta = 0.6 
@@ -102,7 +128,8 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
             else: pdf.ln(6)
         pdf.ln(3)
 
-    print_section("1. General Project Details", project_data)
+    # Note: Header updated here in print call
+    print_section("1. General Detail", project_data)
     print_section("2. Process Conditions", process_data)
     print_section("3. Fluid Properties & Coefficients", valve_data)
     print_section("4. Mechanical Construction", mech_data)
@@ -158,11 +185,15 @@ def get_fluid_properties(fluid_name, T_kelvin, P_kpaa, quality_x=None, service="
 # 3. SIDEBAR INPUTS
 # ==========================================
 st.title("🛡️ SGM Valves - Sizing Pro")
-st.sidebar.header("1. Project Details")
+
+# --- UPDATED: GENERAL DETAIL HEADER ---
+st.sidebar.header("1. General Detail")
 customer = st.sidebar.text_input("Customer Name", "SGM Client")
 tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
+# --- ADDED: NEW FIELDS ---
+enquiry_no = st.sidebar.text_input("Enquiry No", "ENQ-001")
+offer_no = st.sidebar.text_input("Offer No", "OFF-001")
 desc = st.sidebar.text_input("Description", "Separator Relief")
-offer_no = st.sidebar.text_input("Offer No", "25260001ABC")
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Fluid Selection")
@@ -236,17 +267,32 @@ st.sidebar.header("5. Mechanical Construction")
 valve_standard = st.sidebar.radio("Select Valve Standard", ["API 526 (Flanged)", "Non-API / Compact (Threaded)"])
 st.sidebar.markdown("---")
 
-c_m1, c_m2 = st.sidebar.columns(2)
-body_mat = c_m1.text_input("Body Material", "WCB")
-nozzle_mat = c_m2.text_input("Nozzle Material", "SS316")
-c_m3, c_m4 = st.sidebar.columns(2)
-disc_mat = c_m3.text_input("Disc Material", "SS316")
-spring_mat = c_m4.text_input("Spring Material", "Inconel X750")
+# --- MATERIAL DROPDOWNS ---
+moc_body_list = ["A216 Gr WCB", "A351 Gr CF8", "A351 Gr CF8M", "A351 Gr CF3", "A351 Gr CF3M", "Other"]
+moc_trim_list = ["SS316", "SS304", "SS316L", "SS304L", "A351 Gr CF8", "A351 Gr CF8M", "Hastelloy C", "Monel", "Alloy 20", "Inconel", "Other"]
+moc_spring_list = ["Spring Steel", "Chrome Steel", "SS316", "High Temp Alloy Steel", "Inconel", "Inconel X750", "Other"]
 
+c_m1, c_m2 = st.sidebar.columns(2)
+sel_body = c_m1.selectbox("Body Material", moc_body_list)
+sel_nozzle = c_m2.selectbox("Nozzle Material", moc_trim_list)
+
+body_mat = st.sidebar.text_input("Specify Body", "") if sel_body == "Other" else sel_body
+nozzle_mat = st.sidebar.text_input("Specify Nozzle", "") if sel_nozzle == "Other" else sel_nozzle
+
+c_m3, c_m4 = st.sidebar.columns(2)
+sel_disc = c_m3.selectbox("Disc Material", moc_trim_list)
+sel_spring = c_m4.selectbox("Spring Material", moc_spring_list)
+
+disc_mat = st.sidebar.text_input("Specify Disc", "") if sel_disc == "Other" else sel_disc
+spring_mat = st.sidebar.text_input("Specify Spring", "") if sel_spring == "Other" else sel_spring
+
+# --- END CONNECTIONS ---
 inlet_str = "N/A"
 outlet_str = "N/A"
 sel_inlet_sz = ""
 sel_outlet_sz = ""
+inlet_rating = ""
+outlet_rating = ""
 
 st.sidebar.subheader("End Connections")
 if valve_standard == "API 526 (Flanged)":
@@ -271,11 +317,11 @@ else:
     inlet_str = f"{sel_inlet_sz} {conn_type.split(' ')[0]}"
     outlet_str = f"{sel_outlet_sz} {conn_type.split(' ')[0]}"
 
-# --- ADDED: Centre to Face Inputs ---
-st.sidebar.subheader("Dimensions")
+# --- MANUAL DIMENSION INPUTS (Used for Non-API) ---
+st.sidebar.subheader("Dimensions (Non-API Manual)")
 c_dim1, c_dim2 = st.sidebar.columns(2)
-c_face_inlet = c_dim1.number_input("C-to-Face Inlet (mm)", value=0)
-c_face_outlet = c_dim2.number_input("C-to-Face Outlet (mm)", value=0)
+c_face_inlet_manual = c_dim1.number_input("C-to-Face Inlet (mm)", value=0)
+c_face_outlet_manual = c_dim2.number_input("C-to-Face Outlet (mm)", value=0)
 
 lever_type = st.sidebar.selectbox("Lever Type", ["None", "Packed Lever", "Plain Lever", "Open Lever"])
 bellows = st.sidebar.checkbox("Bellows Required?", value=False)
@@ -380,7 +426,7 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             if A_req < 0: A_req = 1.0
             formula_used = "A = W / (G_flux * Kd * Kb * Kc * 0.9)"
 
-        api_orifices = {'B': 39, 'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
+        api_orifices = {'B': 39, 'C': 57, 'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
         sel_orf = "N/A"
         sel_area = 0
         sel_letter = ""
@@ -392,10 +438,19 @@ if st.button("🚀 Calculate & Generate Datasheet"):
                 break
 
         size_str = "Custom"
+        final_dim_in = c_face_inlet_manual
+        final_dim_out = c_face_outlet_manual
+        
         if valve_standard == "API 526 (Flanged)":
             if sel_letter in api_526_sizes:
                 in_s, out_s = api_526_sizes[sel_letter]
                 size_str = f"{in_s} x {out_s}"
+                found_dims = get_api_dimensions(sel_letter, inlet_rating, outlet_rating)
+                if found_dims:
+                    final_dim_in, final_dim_out = found_dims
+                    calc_note += f" | Dims found for {sel_letter} {inlet_rating}x{outlet_rating}"
+                else:
+                    calc_note += " | Standard API Dims not found for this combo."
             else: size_str = "Check API Std"
         else:
             size_str = f"{sel_inlet_sz} x {sel_outlet_sz}"
@@ -404,15 +459,26 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         c1.success(f"Required Area: **{A_req:.2f} mm²**")
         c2.metric("Selected Orifice", sel_orf)
         c3.metric("Valve Size", size_str)
+        
+        if valve_standard == "API 526 (Flanged)":
+            st.info(f"📏 **Dimensions:** Inlet C-to-F: {final_dim_in} mm | Outlet C-to-F: {final_dim_out} mm")
 
-        proj_d = {"Customer": customer, "Tag No": tag_no, "Description": desc, "Service": service_type}
+        # --- UPDATED: Data Packing with New Fields ---
+        proj_d = {
+            "Customer": customer, 
+            "Tag No": tag_no, 
+            "Enquiry No": enquiry_no,
+            "Offer No": offer_no,
+            "Description": desc, 
+            "Service": service_type
+        }
+        
         proc_d = {"Fluid": selected_fluid, "Required Flow": f"{raw_W} {unit_W}", "Set Pressure": f"{raw_P1} {unit_P1}", "Back Pressure": f"{raw_P2} {unit_P2}", "Relieving Temp": f"{raw_T1} {unit_T1}", "Overpressure": "10% Accumulation"}
         prop_d = {}
         if service_type == "Two-Phase": prop_d = {"Quality (x)": f"{input_quality}", "Omega (w)": f"{u_omega:.3f}", "Inlet Density": f"{u_rho:.1f} kg/m3"}
         else: prop_d = {"MW": f"{u_Mw:.2f}", "k (Cp/Cv)": f"{u_k:.3f}", "Z Factor": f"{u_Z:.3f}", "Specific Gravity": f"{u_SG:.3f}", "Viscosity": f"{u_visc:.3f} cP" if service_type=="Liquid" else "N/A"}
         prop_d.update({"Kd": f"{Kd}", "Kb": f"{Kb}", "Kc": f"{Kc}"})
         
-        # --- ADDED C-to-F to Mechanical Data ---
         mech_d = {
             "Type": valve_standard, 
             "Valve Size": size_str, 
@@ -425,8 +491,8 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             "Lever": lever_type, 
             "Inlet Conn": inlet_str, 
             "Outlet Conn": outlet_str,
-            "Center to Face (Inlet)": f"{c_face_inlet} mm",
-            "Center to Face (Outlet)": f"{c_face_outlet} mm"
+            "Center to Face (Inlet)": f"{final_dim_in} mm",
+            "Center to Face (Outlet)": f"{final_dim_out} mm"
         }
         
         res_d = {
@@ -438,10 +504,39 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         }
 
         pdf_data = create_datasheet(proj_d, proc_d, prop_d, mech_d, res_d)
+        
+        # Save bytes to session for batch
+        st.session_state.project_log.append({
+            "Tag": tag_no, 
+            "Size": size_str, 
+            "Orifice": sel_letter, 
+            "Service": service_type,
+            "PDF_Bytes": pdf_data
+        })
+        
         st.download_button("📥 Download SGM Datasheet", pdf_data, f"{tag_no}_Datasheet.pdf", "application/pdf")
-        st.session_state.project_log.append({"Tag": tag_no, "Size": size_str, "Orifice": sel_letter, "Service": service_type})
 
     except Exception as e: st.error(f"Error: {e}")
 
+# --- LOG TABLE & BATCH DOWNLOAD ---
 st.markdown("---")
-if st.session_state.project_log: st.dataframe(pd.DataFrame(st.session_state.project_log))
+if st.session_state.project_log:
+    # Display table without the heavy bytes column
+    disp_df = pd.DataFrame(st.session_state.project_log).drop(columns=["PDF_Bytes"], errors="ignore")
+    st.dataframe(disp_df)
+    
+    # Create ZIP
+    if st.button("📦 Download All Datasheets (ZIP)"):
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            for item in st.session_state.project_log:
+                # Add PDF to zip with unique name
+                fname = f"{item['Tag']}_Datasheet.pdf"
+                zf.writestr(fname, item['PDF_Bytes'])
+        
+        st.download_button(
+            label="⬇️ Click to Download Bundle",
+            data=zip_buffer.getvalue(),
+            file_name="Project_Datasheets.zip",
+            mime="application/zip"
+        )
