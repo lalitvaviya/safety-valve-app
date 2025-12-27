@@ -128,7 +128,6 @@ def create_datasheet(project_data, process_data, valve_data, mech_data, results_
             else: pdf.ln(6)
         pdf.ln(3)
 
-    # Note: Header updated here in print call
     print_section("1. General Detail", project_data)
     print_section("2. Process Conditions", process_data)
     print_section("3. Fluid Properties & Coefficients", valve_data)
@@ -186,11 +185,9 @@ def get_fluid_properties(fluid_name, T_kelvin, P_kpaa, quality_x=None, service="
 # ==========================================
 st.title("🛡️ SGM Valves - Sizing Pro")
 
-# --- UPDATED: GENERAL DETAIL HEADER ---
 st.sidebar.header("1. General Detail")
 customer = st.sidebar.text_input("Customer Name", "SGM Client")
 tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
-# --- ADDED: NEW FIELDS ---
 enquiry_no = st.sidebar.text_input("Enquiry No", "ENQ-001")
 offer_no = st.sidebar.text_input("Offer No", "OFF-001")
 desc = st.sidebar.text_input("Description", "Separator Relief")
@@ -214,30 +211,49 @@ def input_w_unit(lbl, def_val, units, k):
 raw_W, unit_W = input_w_unit("Flow Rate", 1000.0, flow_units, "w")
 press_units = ["barg", "psig", "kPag", "kg/cm2g"]
 raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, press_units, "p1")
-raw_P2, unit_P2 = input_w_unit("Back Pressure", 0.0, press_units, "p2")
+
+# --- UPDATED: Back Pressure Split ---
+# Constant BP
+raw_BP_const, unit_BP_const = input_w_unit("Constant Back Pressure", 0.0, press_units, "p2_c")
+# Variable BP
+raw_BP_var, unit_BP_var = input_w_unit("Variable Back Pressure", 0.0, press_units, "p2_v")
+
 raw_T1, unit_T1 = input_w_unit("Temperature", 150.0, ["°C", "°F", "K"], "t1")
 
-# --- BELLOWS LOGIC ---
-p1_bar_val = 0.0
-p2_bar_val = 0.0
-if unit_P1 == "barg": p1_bar_val = raw_P1
-elif unit_P1 == "psig": p1_bar_val = raw_P1 * 0.0689
-elif unit_P1 == "kg/cm2g": p1_bar_val = raw_P1 * 0.98
-elif unit_P1 == "kPag": p1_bar_val = raw_P1 / 100
+# --- PRESSURE CALCULATIONS (Helper) ---
+atm = 101.325
+def get_kpa_gauge(raw, unit):
+    if unit == "barg": return raw * 100
+    if unit == "psig": return raw * 6.89476
+    if unit == "kg/cm2g": return raw * 98.0665
+    if unit == "kPag": return raw
+    return raw
 
-if unit_P2 == "barg": p2_bar_val = raw_P2
-elif unit_P2 == "psig": p2_bar_val = raw_P2 * 0.0689
-elif unit_P2 == "kg/cm2g": p2_bar_val = raw_P2 * 0.98
-elif unit_P2 == "kPag": p2_bar_val = raw_P2 / 100
+def to_kpa_abs_from_gauge(gauge_kpa):
+    return gauge_kpa + atm
+
+# 1. Convert Set Pressure
+P1_gauge_kpa = get_kpa_gauge(raw_P1, unit_P1)
+P1_abs = to_kpa_abs_from_gauge(P1_gauge_kpa)
+
+# 2. Convert & Sum Back Pressures
+BP_const_kpa = get_kpa_gauge(raw_BP_const, unit_BP_const)
+BP_var_kpa = get_kpa_gauge(raw_BP_var, unit_BP_var)
+P2_gauge_total_kpa = BP_const_kpa + BP_var_kpa
+P2_abs = to_kpa_abs_from_gauge(P2_gauge_total_kpa)
+
+# --- BELLOWS LOGIC (Based on Total Back Pressure) ---
+p1_bar_equiv = P1_gauge_kpa / 100
+p2_bar_total_equiv = P2_gauge_total_kpa / 100
 
 back_pressure_ratio = 0.0
-if p1_bar_val > 0:
-    back_pressure_ratio = (p2_bar_val / p1_bar_val) * 100
+if p1_bar_equiv > 0:
+    back_pressure_ratio = (p2_bar_total_equiv / p1_bar_equiv) * 100
 
 bellows_recommended = False
 if back_pressure_ratio > 10:
     bellows_recommended = True
-    st.sidebar.warning(f"⚠️ Back Pressure is {back_pressure_ratio:.1f}% (>10%). Bellows Recommended!")
+    st.sidebar.warning(f"⚠️ Total Back Pressure is {back_pressure_ratio:.1f}% (>10%). Bellows Recommended!")
 
 input_quality = 0.0
 omega_manual = 1.0
@@ -301,8 +317,8 @@ if valve_standard == "API 526 (Flanged)":
     
     if inlet_rating in flange_limits_barg:
         limit = flange_limits_barg[inlet_rating]
-        if p1_bar_val > limit:
-            st.sidebar.error(f"🚨 Set Pressure ({p1_bar_val:.1f} bar) exceeds {inlet_rating} rating limit (~{limit} bar)!")
+        if p1_bar_equiv > limit:
+            st.sidebar.error(f"🚨 Set Pressure ({p1_bar_equiv:.1f} bar) exceeds {inlet_rating} rating limit (~{limit} bar)!")
     
     outlet_rating = c_conn2.selectbox("Outlet Rating", ["150#", "300#", "150#"], index=0)
     conn_type = st.sidebar.selectbox("Connection Type", ["RF Flange", "RTJ Flange"])
@@ -329,16 +345,6 @@ bellows = st.sidebar.checkbox("Bellows Required?", value=False)
 # ==========================================
 # 4. CALCULATIONS
 # ==========================================
-atm = 101.325
-def to_kpa_abs(raw, unit):
-    if unit == "barg": return (raw * 100) + atm
-    if unit == "psig": return (raw * 6.89476) + atm
-    if unit == "kg/cm2g": return (raw * 98.0665) + atm
-    if unit == "kPag": return raw + atm
-    return raw
-
-P1_abs = to_kpa_abs(raw_P1, unit_P1)
-P2_abs = to_kpa_abs(raw_P2, unit_P2)
 T_K = (raw_T1 + 273.15) if unit_T1 == "°C" else ((raw_T1 - 32) * 5/9 + 273.15) if unit_T1 == "°F" else raw_T1
 
 u_Mw, u_k, u_Z, u_SG, u_visc, u_omega, u_rho = 44.0, 1.3, 0.95, 1.0, 1.0, 1.0, 10.0
@@ -426,7 +432,8 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             if A_req < 0: A_req = 1.0
             formula_used = "A = W / (G_flux * Kd * Kb * Kc * 0.9)"
 
-        api_orifices = {'B': 39, 'C': 57, 'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
+        # --- UPDATED API ORIFICES (Removed B & C) ---
+        api_orifices = {'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
         sel_orf = "N/A"
         sel_area = 0
         sel_letter = ""
@@ -463,7 +470,7 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         if valve_standard == "API 526 (Flanged)":
             st.info(f"📏 **Dimensions:** Inlet C-to-F: {final_dim_in} mm | Outlet C-to-F: {final_dim_out} mm")
 
-        # --- UPDATED: Data Packing with New Fields ---
+        # --- DATA PACKING ---
         proj_d = {
             "Customer": customer, 
             "Tag No": tag_no, 
@@ -473,7 +480,18 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             "Service": service_type
         }
         
-        proc_d = {"Fluid": selected_fluid, "Required Flow": f"{raw_W} {unit_W}", "Set Pressure": f"{raw_P1} {unit_P1}", "Back Pressure": f"{raw_P2} {unit_P2}", "Relieving Temp": f"{raw_T1} {unit_T1}", "Overpressure": "10% Accumulation"}
+        # --- UPDATED PROCESS DATA ---
+        proc_d = {
+            "Fluid": selected_fluid, 
+            "Required Flow": f"{raw_W} {unit_W}", 
+            "Set Pressure": f"{raw_P1} {unit_P1}", 
+            "Constant Back Pressure": f"{raw_BP_const} {unit_BP_const}",
+            "Variable Back Pressure": f"{raw_BP_var} {unit_BP_var}",
+            "Total Back Pressure": f"{raw_BP_const + raw_BP_var:.2f} {unit_BP_const}",
+            "Relieving Temp": f"{raw_T1} {unit_T1}", 
+            "Overpressure": "10% Accumulation"
+        }
+        
         prop_d = {}
         if service_type == "Two-Phase": prop_d = {"Quality (x)": f"{input_quality}", "Omega (w)": f"{u_omega:.3f}", "Inlet Density": f"{u_rho:.1f} kg/m3"}
         else: prop_d = {"MW": f"{u_Mw:.2f}", "k (Cp/Cv)": f"{u_k:.3f}", "Z Factor": f"{u_Z:.3f}", "Specific Gravity": f"{u_SG:.3f}", "Viscosity": f"{u_visc:.3f} cP" if service_type=="Liquid" else "N/A"}
@@ -505,7 +523,6 @@ if st.button("🚀 Calculate & Generate Datasheet"):
 
         pdf_data = create_datasheet(proj_d, proc_d, prop_d, mech_d, res_d)
         
-        # Save bytes to session for batch
         st.session_state.project_log.append({
             "Tag": tag_no, 
             "Size": size_str, 
@@ -521,16 +538,13 @@ if st.button("🚀 Calculate & Generate Datasheet"):
 # --- LOG TABLE & BATCH DOWNLOAD ---
 st.markdown("---")
 if st.session_state.project_log:
-    # Display table without the heavy bytes column
     disp_df = pd.DataFrame(st.session_state.project_log).drop(columns=["PDF_Bytes"], errors="ignore")
     st.dataframe(disp_df)
     
-    # Create ZIP
     if st.button("📦 Download All Datasheets (ZIP)"):
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w") as zf:
             for item in st.session_state.project_log:
-                # Add PDF to zip with unique name
                 fname = f"{item['Tag']}_Datasheet.pdf"
                 zf.writestr(fname, item['PDF_Bytes'])
         
