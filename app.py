@@ -21,81 +21,57 @@ except ImportError:
 # ==========================================
 st.set_page_config(page_title="SGM Valve Sizing", layout="wide", page_icon="🛡️")
 
-# --- USER DATABASE (Simple Hardcoded for Demo) ---
-# Format: 'username': {'password': '...', 'role': 'admin' or 'user', 'can_download': True/False}
+# --- USER DATABASE ---
 USERS = {
     "admin": {"password": "admin123", "role": "admin", "can_download": True},
-    "user":  {"password": "user123",  "role": "user",  "can_download": False}, # Example restricted user
+    "user":  {"password": "user123",  "role": "user",  "can_download": False},
     "guest": {"password": "guest",    "role": "user",  "can_download": False}
 }
 
-# --- SESSION STATE INIT ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'project_log' not in st.session_state:
-    st.session_state.project_log = []
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'username' not in st.session_state: st.session_state.username = None
+if 'project_log' not in st.session_state: st.session_state.project_log = []
 
-# --- LOGIN FUNCTION ---
 def login_screen():
     st.markdown("## 🔐 SGM Sizing Login")
-    
     c1, c2 = st.columns([1, 2])
     with c1:
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
-        
         if st.button("Login"):
             if username in USERS and USERS[username]['password'] == password:
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.rerun()
-            else:
-                st.error("Invalid Username or Password")
+                st.session_state.authenticated = True; st.session_state.username = username; st.rerun()
+            else: st.error("Invalid Username or Password")
 
 def logout():
-    st.session_state.authenticated = False
-    st.session_state.username = None
-    st.rerun()
+    st.session_state.authenticated = False; st.session_state.username = None; st.rerun()
 
-# --- ACTIVITY LOGGER ---
 def log_activity(user, tag, service, p1, p2):
     file_name = "activity_log.csv"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Check if file exists to write header
     file_exists = os.path.isfile(file_name)
-    
     with open(file_name, mode='a', newline='') as f:
         writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["Timestamp", "User", "Tag No", "Service", "Set Pressure", "Total Back Pressure"])
+        if not file_exists: writer.writerow(["Timestamp", "User", "Tag No", "Service", "Set Pressure", "Total Back Pressure"])
         writer.writerow([timestamp, user, tag, service, p1, p2])
 
-# --- STOP EXECUTION IF NOT LOGGED IN ---
-if not st.session_state.authenticated:
-    login_screen()
-    st.stop()
+if not st.session_state.authenticated: login_screen(); st.stop()
 
-# ==========================================
-# 3. MAIN APPLICATION (Only runs if Logged In)
-# ==========================================
-
-# Current User Permissions
 current_user = st.session_state.username
-user_role = USERS[current_user]['role']
 can_download = USERS[current_user]['can_download']
 
 # --- SIDEBAR: User Info & Logout ---
 st.sidebar.info(f"👤 Logged in as: **{current_user}**")
-if st.sidebar.button("Log Out"):
-    logout()
+if st.sidebar.button("Log Out"): logout()
 st.sidebar.markdown("---")
 
-# --- FLANGE & API DATA ---
+# --- DATA ---
 flange_limits_barg = {"150#": 19.6, "300#": 51.1, "600#": 102.1, "900#": 153.2, "1500#": 255.3, "2500#": 425.5}
 api_526_sizes = {'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'), 'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'), 'K': ('3"', '4"'), 'L': ('3"', '4"'), 'M': ('4"', '6"'), 'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'), 'R': ('6"', '8"'), 'T': ('8"', '10"')}
+api_orifices = {'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
+
+# --- API 526 CENTER-TO-FACE DIMENSIONS (mm) ---
+# Simplified map for demo (same as previous)
 api_526_dims = {
     ('D', '150#', '150#'): (105, 114), ('D', '300#', '150#'): (105, 114), ('D', '600#', '150#'): (105, 114), ('D', '900#', '300#'): (140, 165), ('D', '1500#', '300#'): (140, 165),
     ('E', '150#', '150#'): (105, 121), ('E', '300#', '150#'): (105, 121), ('E', '600#', '150#'): (105, 121), ('E', '900#', '300#'): (140, 165), ('E', '1500#', '300#'): (140, 165),
@@ -194,6 +170,11 @@ def get_fluid_properties(fluid_name, T_kelvin, P_kpaa, quality_x=None, service="
 # ==========================================
 st.title("🛡️ SGM Valves - Sizing Pro")
 
+# --- CALCULATION MODE SWITCH ---
+st.sidebar.markdown("### ⚙️ Calculation Mode")
+calc_mode = st.sidebar.radio("Method", ["Sizing (Find Orifice)", "Capacity (Find Flow)"], label_visibility="collapsed")
+st.sidebar.markdown("---")
+
 st.sidebar.header("1. General Detail")
 customer = st.sidebar.text_input("Customer Name", "SGM Client")
 tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
@@ -217,7 +198,19 @@ def input_w_unit(lbl, def_val, units, k):
     c1, c2 = st.sidebar.columns([2,1])
     return c1.number_input(lbl, value=def_val, key=k+"_v"), c2.selectbox("U", units, key=k+"_u")
 
-raw_W, unit_W = input_w_unit("Flow Rate", 1000.0, flow_units, "w")
+# --- CONDITIONAL INPUT: FLOW vs ORIFICE ---
+raw_W, unit_W = 0.0, "kg/hr"
+sel_orifice_cap = "D"
+
+if calc_mode == "Sizing (Find Orifice)":
+    raw_W, unit_W = input_w_unit("Required Flow Rate", 1000.0, flow_units, "w")
+else:
+    # Capacity Mode
+    st.sidebar.markdown("**Select Orifice to find Capacity:**")
+    sel_orifice_cap = st.sidebar.selectbox("Designated Orifice", list(api_orifices.keys()))
+    # We still need unit selection for output display
+    unit_W = st.sidebar.selectbox("Output Flow Unit", flow_units)
+
 press_units = ["barg", "psig", "kPag", "kg/cm2g"]
 raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, press_units, "p1")
 raw_BP_const, unit_BP_const = input_w_unit("Constant Back Pressure", 0.0, press_units, "p2_c")
@@ -241,7 +234,6 @@ BP_var_kpa = get_kpa_gauge(raw_BP_var, unit_BP_var)
 P2_gauge_total_kpa = BP_const_kpa + BP_var_kpa
 P2_abs = to_kpa_abs_from_gauge(P2_gauge_total_kpa)
 
-# Bellows Warning
 p1_bar_equiv = P1_gauge_kpa / 100
 p2_bar_total_equiv = P2_gauge_total_kpa / 100
 back_pressure_ratio = 0.0
@@ -337,12 +329,14 @@ if selected_fluid == "Custom (Manual Input)":
         u_SG = st.sidebar.number_input("SG", value=1.0)
 
 W_base = 0.0
-if unit_W == "kg/hr": W_base = raw_W
-elif unit_W == "lb/hr": W_base = raw_W * 0.453592
-elif unit_W == "Nm3/hr": W_base = (raw_W / 22.414) * u_Mw if u_Mw > 0 else 0
-elif unit_W == "LPM": W_base = (raw_W * 0.06 / 22.414) * u_Mw if u_Mw > 0 else 0
-elif unit_W == "m3/hr": W_base = raw_W * 1000 * u_SG
-elif unit_W == "LPH": W_base = raw_W * u_SG
+# Only convert input flow if we are in Sizing Mode
+if calc_mode == "Sizing (Find Orifice)":
+    if unit_W == "kg/hr": W_base = raw_W
+    elif unit_W == "lb/hr": W_base = raw_W * 0.453592
+    elif unit_W == "Nm3/hr": W_base = (raw_W / 22.414) * u_Mw if u_Mw > 0 else 0
+    elif unit_W == "LPM": W_base = (raw_W * 0.06 / 22.414) * u_Mw if u_Mw > 0 else 0
+    elif unit_W == "m3/hr": W_base = raw_W * 1000 * u_SG
+    elif unit_W == "LPH": W_base = raw_W * u_SG
 
 # ==========================================
 # 6. EXECUTION
@@ -350,68 +344,147 @@ elif unit_W == "LPH": W_base = raw_W * u_SG
 st.markdown("### 📊 Sizing Dashboard")
 
 if st.button("🚀 Calculate & Generate Datasheet"):
-    # LOG ACTIVITY
     log_activity(current_user, tag_no, service_type, f"{raw_P1} {unit_P1}", f"{raw_BP_const+raw_BP_var} {unit_BP_const}")
-    
     try:
         if bellows_recommended and not bellows: st.warning("⚠️ WARNING: Back Pressure > 10% but 'Bellows Required' is NOT checked.")
-        P1_sizing = (P1_abs - atm) * 1.10 + atm; dP = P1_sizing - P2_abs; A_req = 0.0; calc_note = ""; formula_used = ""
         
-        if service_type in ["Gas/Vapor", "Steam"]:
-            k_term = (u_k+1)/(u_k-1); C = 520 * np.sqrt(u_k * ((2/(u_k+1))**k_term))
-            Kn = 1.0
-            if service_type == "Steam" and P1_sizing > 10443: Kn = (0.276 * (P1_sizing/1000) - 1000) / (0.33 * (P1_sizing/1000) - 1061); calc_note = "Napier Correction (Kn) applied."
-            Ksh = Ksh_manual if service_type == "Steam" and selected_fluid == "Custom (Manual Input)" else 1.0
-            num = 13160 * W_base * np.sqrt((T_K * u_Z) / u_Mw); den = C * Kd * P1_sizing * Kb * Kc * Kn * Ksh
-            A_req = num / den; formula_used = "A = (W * sqrt(T*Z/M)) / (C * Kd * P1 * Kb * Kc)"
-        elif service_type == "Liquid":
-            Q_lpm = (W_base / u_SG) / 60; 
-            if dP <= 0: st.error("Back Pres > Set Pres!"); st.stop()
-            A_req = (11.78 * Q_lpm / (Kd * Kb * Kc * Kv)) * np.sqrt(u_SG / dP); formula_used = "A = (Q_gpm/38) / (Kd * Kw * Kc * Kv) * sqrt(G / (P1-P2))"
-        elif service_type == "Two-Phase":
-            eta_c = calculate_eta_c(u_omega); P_cf = eta_c * P1_sizing; is_critical = P2_abs < P_cf
-            calc_note = f"Flow is {'Critical' if is_critical else 'Subcritical'} (eta_c={eta_c:.3f})"
-            v_0 = 1.0 / u_rho; P0 = P1_sizing * 1000; term = P0 / v_0
-            G_si = eta_c * math.sqrt(term / u_omega) if is_critical else eta_c * math.sqrt( (P0/v_0) / u_omega ) 
-            W_kg_s = W_base / 3600; A_m2 = W_kg_s / (G_si * 0.9 * Kd * Kb * Kc); A_req = A_m2 * 1e6; 
-            if A_req < 0: A_req = 1.0
-            formula_used = "A = W / (G_flux * Kd * Kb * Kc * 0.9)"
+        P1_sizing = (P1_abs - atm) * 1.10 + atm 
+        dP = P1_sizing - P2_abs
+        
+        # --- CALCULATION LOGIC ---
+        A_final = 0.0
+        W_capacity = 0.0
+        sel_orf = ""
+        sel_letter = ""
+        calc_note = ""
+        formula_used = ""
 
-        api_orifices = {'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
-        sel_orf = "N/A"; sel_area = 0; sel_letter = ""
-        for l, a in api_orifices.items():
-            if a >= A_req: sel_orf = f"{l} ({a} mm²)"; sel_area = a; sel_letter = l; break
+        # --- 1. DETERMINE AREA OR CAPACITY ---
+        if calc_mode == "Sizing (Find Orifice)":
+            # FORWARD: Find Area
+            if service_type in ["Gas/Vapor", "Steam"]:
+                k_term = (u_k+1)/(u_k-1); C = 520 * np.sqrt(u_k * ((2/(u_k+1))**k_term))
+                Kn = 1.0; Ksh = 1.0
+                if service_type == "Steam":
+                    if P1_sizing > 10443: Kn = (0.276 * (P1_sizing/1000) - 1000) / (0.33 * (P1_sizing/1000) - 1061); calc_note = "Napier Correction (Kn) applied."
+                    if selected_fluid == "Custom (Manual Input)": Ksh = Ksh_manual
+                num = 13160 * W_base * np.sqrt((T_K * u_Z) / u_Mw); den = C * Kd * P1_sizing * Kb * Kc * Kn * Ksh
+                A_final = num / den; formula_used = "A = (W * sqrt(T*Z/M)) / (C * Kd * P1 * Kb * Kc)"
+            
+            elif service_type == "Liquid":
+                Q_lpm = (W_base / u_SG) / 60
+                if dP <= 0: st.error("Back Pres > Set Pres!"); st.stop()
+                A_final = (11.78 * Q_lpm / (Kd * Kb * Kc * Kv)) * np.sqrt(u_SG / dP)
+                formula_used = "A = (Q_gpm/38) / (Kd * Kw * Kc * Kv) * sqrt(G / (P1-P2))"
+            
+            elif service_type == "Two-Phase":
+                eta_c = calculate_eta_c(u_omega); P_cf = eta_c * P1_sizing; is_critical = P2_abs < P_cf
+                calc_note = f"Flow is {'Critical' if is_critical else 'Subcritical'} (eta_c={eta_c:.3f})"
+                v_0 = 1.0 / u_rho; P0 = P1_sizing * 1000
+                G_si = eta_c * math.sqrt((P0/v_0)/u_omega) if is_critical else eta_c * math.sqrt((P0/v_0)/u_omega) # Simplified critical assumption for sizing safety
+                W_kg_s = W_base / 3600; A_m2 = W_kg_s / (G_si * 0.9 * Kd * Kb * Kc); A_final = A_m2 * 1e6
+                formula_used = "A = W / (G_flux * Kd * Kb * Kc * 0.9)"
 
+            # Select Orifice
+            sel_orf = "N/A"; sel_area = 0; sel_letter = ""
+            for l, a in api_orifices.items():
+                if a >= A_final: sel_orf = f"{l} ({a} mm²)"; sel_area = a; sel_letter = l; break
+            
+            # For display
+            disp_req_area = f"{A_final:.2f} mm²"
+            disp_sel_area = f"{sel_area} mm² ({sel_letter})"
+            
+        else:
+            # REVERSE: Find Capacity
+            sel_letter = sel_orifice_cap
+            sel_area = api_orifices[sel_letter]
+            sel_orf = f"{sel_letter} ({sel_area} mm²)"
+            A_final = sel_area # For logic consistency
+            
+            if service_type in ["Gas/Vapor", "Steam"]:
+                k_term = (u_k+1)/(u_k-1); C = 520 * np.sqrt(u_k * ((2/(u_k+1))**k_term))
+                Kn = 1.0; Ksh = 1.0
+                if service_type == "Steam":
+                    if P1_sizing > 10443: Kn = (0.276 * (P1_sizing/1000) - 1000) / (0.33 * (P1_sizing/1000) - 1061)
+                    if selected_fluid == "Custom (Manual Input)": Ksh = Ksh_manual
+                # W = A * C * Kd * P1 * Kb * Kc * Kn * Ksh / (13160 * sqrt(T*Z/M))
+                term_sqrt = np.sqrt((T_K * u_Z) / u_Mw)
+                W_capacity = (sel_area * C * Kd * P1_sizing * Kb * Kc * Kn * Ksh) / (13160 * term_sqrt)
+                formula_used = "W = (A * C * Kd * P1 * Kb * Kc) / (13160 * sqrt(T*Z/M))"
+
+            elif service_type == "Liquid":
+                if dP <= 0: st.error("Back Pres > Set Pres!"); st.stop()
+                # A = (11.78 * Q_lpm) / (...) * sqrt(...)
+                # Q_lpm = (A * Kd * Kb * Kc * Kv * sqrt(dP)) / (11.78 * sqrt(SG))
+                Q_lpm_cap = (sel_area * Kd * Kb * Kc * Kv * np.sqrt(dP)) / (11.78 * np.sqrt(u_SG))
+                W_capacity = Q_lpm_cap * 60 * u_SG # kg/hr
+                formula_used = "Q = (A * Kd * Kw * Kc * Kv * 11.78 * sqrt(dP/G))"
+
+            elif service_type == "Two-Phase":
+                eta_c = calculate_eta_c(u_omega); P_cf = eta_c * P1_sizing; is_critical = P2_abs < P_cf
+                v_0 = 1.0 / u_rho; P0 = P1_sizing * 1000
+                G_si = eta_c * math.sqrt((P0/v_0)/u_omega) # Simplified
+                # W = A * G * Kd...
+                A_m2 = sel_area / 1e6
+                W_kg_s = A_m2 * G_si * 0.9 * Kd * Kb * Kc
+                W_capacity = W_kg_s * 3600
+                formula_used = "W = A * G_flux * Kd * Kb * Kc * 0.9"
+
+            # Convert W_capacity (kg/hr) to selected Unit
+            W_display = 0.0
+            if unit_W == "kg/hr": W_display = W_capacity
+            elif unit_W == "lb/hr": W_display = W_capacity / 0.453592
+            elif unit_W == "Nm3/hr": W_display = (W_capacity / u_Mw) * 22.414 if u_Mw > 0 else 0
+            elif unit_W == "LPM": W_display = ((W_capacity / u_Mw) * 22.414) / 0.06 # approx
+            elif unit_W == "m3/hr": W_display = (W_capacity / u_SG) / 1000
+            elif unit_W == "LPH": W_display = W_capacity / u_SG
+            
+            disp_req_area = "N/A (Capacity Mode)"
+            disp_sel_area = f"{sel_area} mm² ({sel_letter})"
+            raw_W = W_display # For PDF Print
+            
+        # --- DIMENSION LOOKUP ---
         size_str = "Custom"; final_dim_in = c_face_inlet_manual; final_dim_out = c_face_outlet_manual
         if valve_standard == "API 526 (Flanged)":
             if sel_letter in api_526_sizes:
                 in_s, out_s = api_526_sizes[sel_letter]; size_str = f"{in_s} x {out_s}"
                 found_dims = get_api_dimensions(sel_letter, inlet_rating, outlet_rating)
-                if found_dims: final_dim_in, final_dim_out = found_dims; calc_note += f" | API Dims found."
+                if found_dims: final_dim_in, final_dim_out = found_dims; calc_note += " | API Dims found."
                 else: calc_note += " | Std API Dims not found."
             else: size_str = "Check API Std"
         else: size_str = f"{sel_inlet_sz} x {sel_outlet_sz}"
 
+        # --- UI DISPLAY ---
         c1, c2, c3 = st.columns(3)
-        c1.success(f"Required Area: **{A_req:.2f} mm²**"); c2.metric("Selected Orifice", sel_orf); c3.metric("Valve Size", size_str)
+        if calc_mode == "Sizing (Find Orifice)":
+            c1.success(f"Required Area: **{A_final:.2f} mm²**")
+        else:
+            c1.success(f"Rated Capacity: **{raw_W:.2f} {unit_W}**")
+            
+        c2.metric("Selected Orifice", sel_orf)
+        c3.metric("Valve Size", size_str)
         if valve_standard == "API 526 (Flanged)": st.info(f"📏 **Dimensions:** Inlet C-to-F: {final_dim_in} mm | Outlet C-to-F: {final_dim_out} mm")
 
+        # --- DATA PACKING ---
         proj_d = {"Customer": customer, "Tag No": tag_no, "Enquiry No": enquiry_no, "Offer No": offer_no, "Description": desc, "Service": service_type}
-        proc_d = {"Fluid": selected_fluid, "Required Flow": f"{raw_W} {unit_W}", "Set Pressure": f"{raw_P1} {unit_P1}", "Constant Back Pressure": f"{raw_BP_const} {unit_BP_const}", "Variable Back Pressure": f"{raw_BP_var} {unit_BP_var}", "Total Back Pressure": f"{raw_BP_const+raw_BP_var:.2f} {unit_BP_const}", "Relieving Temp": f"{raw_T1} {unit_T1}", "Overpressure": "10% Accumulation"}
+        
+        # Adjust Process Data Label based on Mode
+        flow_label = "Required Flow" if calc_mode == "Sizing (Find Orifice)" else "Rated Capacity"
+        
+        proc_d = {"Fluid": selected_fluid, flow_label: f"{raw_W:.2f} {unit_W}", "Set Pressure": f"{raw_P1} {unit_P1}", "Constant Back Pressure": f"{raw_BP_const} {unit_BP_const}", "Variable Back Pressure": f"{raw_BP_var} {unit_BP_var}", "Total Back Pressure": f"{raw_BP_const+raw_BP_var:.2f} {unit_BP_const}", "Relieving Temp": f"{raw_T1} {unit_T1}", "Overpressure": "10% Accumulation"}
+        
         prop_d = {}; prop_d.update({"Kd": f"{Kd}", "Kb": f"{Kb}", "Kc": f"{Kc}"})
         if service_type == "Two-Phase": prop_d.update({"Quality (x)": f"{input_quality}", "Omega (w)": f"{u_omega:.3f}", "Inlet Density": f"{u_rho:.1f} kg/m3"})
         else: prop_d.update({"MW": f"{u_Mw:.2f}", "k (Cp/Cv)": f"{u_k:.3f}", "Z Factor": f"{u_Z:.3f}", "Specific Gravity": f"{u_SG:.3f}", "Viscosity": f"{u_visc:.3f} cP" if service_type=="Liquid" else "N/A"})
         
         mech_d = {"Type": valve_standard, "Valve Size": size_str, "Orifice": sel_letter, "Body Material": body_mat, "Nozzle Material": nozzle_mat, "Disc Material": disc_mat, "Spring Material": spring_mat, "Bellows": "Yes" if bellows else "No", "Lever": lever_type, "Inlet Conn": inlet_str, "Outlet Conn": outlet_str, "Center to Face (Inlet)": f"{final_dim_in} mm", "Center to Face (Outlet)": f"{final_dim_out} mm"}
-        res_d = {"Calculated Area": f"{A_req:.2f} mm²", "Selected Area": f"{sel_area} mm² ({sel_letter})", "Sizing Basis": "API 520 (Omega)" if service_type=="Two-Phase" else "API 520 Part I", "Note": calc_note, "Formula Used": formula_used}
+        
+        res_d = {"Calculated Area": disp_req_area, "Selected Area": disp_sel_area, "Sizing Basis": "API 520 (Omega)" if service_type=="Two-Phase" else "API 520 Part I", "Note": calc_note, "Formula Used": formula_used}
 
         pdf_data = create_datasheet(proj_d, proc_d, prop_d, mech_d, res_d)
         st.session_state.project_log.append({"Tag": tag_no, "Size": size_str, "Orifice": sel_letter, "Service": service_type, "PDF_Bytes": pdf_data})
-        
-        if can_download:
-            st.download_button("📥 Download SGM Datasheet", pdf_data, f"{tag_no}_Datasheet.pdf", "application/pdf")
-        else:
-            st.warning("🔒 Download Restricted. Contact Admin.")
+        if can_download: st.download_button("📥 Download SGM Datasheet", pdf_data, f"{tag_no}_Datasheet.pdf", "application/pdf")
+        else: st.warning("🔒 Download Restricted. Contact Admin.")
 
     except Exception as e: st.error(f"Error: {e}")
 
