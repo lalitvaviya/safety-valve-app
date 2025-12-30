@@ -71,7 +71,6 @@ api_526_sizes = {'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'), 'G':
 api_orifices = {'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
 
 # --- API 526 CENTER-TO-FACE DIMENSIONS (mm) ---
-# Simplified map for demo (same as previous)
 api_526_dims = {
     ('D', '150#', '150#'): (105, 114), ('D', '300#', '150#'): (105, 114), ('D', '600#', '150#'): (105, 114), ('D', '900#', '300#'): (140, 165), ('D', '1500#', '300#'): (140, 165),
     ('E', '150#', '150#'): (105, 121), ('E', '300#', '150#'): (105, 121), ('E', '600#', '150#'): (105, 121), ('E', '900#', '300#'): (140, 165), ('E', '1500#', '300#'): (140, 165),
@@ -193,7 +192,7 @@ selected_fluid = st.sidebar.selectbox("Select Fluid", fluids, index=idx_def)
 
 st.sidebar.markdown("---")
 st.sidebar.header("3. Process Conditions")
-flow_units = ["kg/hr", "lb/hr", "Nm3/hr", "LPM", "m3/hr", "LPH"]
+flow_units = ["kg/hr", "lb/hr", "Nm3/hr", "Sm3/hr", "SCFM", "SCFH", "LPM", "m3/hr", "LPH"]
 def input_w_unit(lbl, def_val, units, k):
     c1, c2 = st.sidebar.columns([2,1])
     return c1.number_input(lbl, value=def_val, key=k+"_v"), c2.selectbox("U", units, key=k+"_u")
@@ -208,11 +207,15 @@ else:
     # Capacity Mode
     st.sidebar.markdown("**Select Orifice to find Capacity:**")
     sel_orifice_cap = st.sidebar.selectbox("Designated Orifice", list(api_orifices.keys()))
-    # We still need unit selection for output display
     unit_W = st.sidebar.selectbox("Output Flow Unit", flow_units)
 
 press_units = ["barg", "psig", "kPag", "kg/cm2g"]
 raw_P1, unit_P1 = input_w_unit("Set Pressure", 10.0, press_units, "p1")
+
+# --- Overpressure Selection ---
+overpressure_pct = st.sidebar.selectbox("Allowable Overpressure", ["10%", "21%"])
+op_mult = 1.10 if overpressure_pct == "10%" else 1.21
+
 raw_BP_const, unit_BP_const = input_w_unit("Constant Back Pressure", 0.0, press_units, "p2_c")
 raw_BP_var, unit_BP_var = input_w_unit("Variable Back Pressure", 0.0, press_units, "p2_v")
 raw_T1, unit_T1 = input_w_unit("Temperature", 150.0, ["°C", "°F", "K"], "t1")
@@ -294,8 +297,9 @@ if valve_standard == "API 526 (Flanged)":
     inlet_str = f"{inlet_rating} {conn_type}"; outlet_str = f"{outlet_rating} {conn_type}"
 else:
     c_sz1, c_sz2 = st.sidebar.columns(2)
-    sel_inlet_sz = c_sz1.selectbox("Inlet Size", size_options=["1/2\"", "3/4\"", "1\"", "1 1/2\"", "2\""], index=0)
-    sel_outlet_sz = c_sz2.selectbox("Outlet Size", size_options=["1/2\"", "3/4\"", "1\"", "1 1/2\"", "2\""], index=1)
+    # --- FIX: Pass options explicitly to avoid TypeErrors ---
+    sel_inlet_sz = c_sz1.selectbox("Inlet Size", options=["1/2\"", "3/4\"", "1\"", "1 1/2\"", "2\""], index=0)
+    sel_outlet_sz = c_sz2.selectbox("Outlet Size", options=["1/2\"", "3/4\"", "1\"", "1 1/2\"", "2\""], index=1)
     conn_type = st.sidebar.selectbox("Connection Type", ["NPT (Male x Female)", "NPT (Female x Female)", "BSP", "Socket Weld"])
     inlet_str = f"{sel_inlet_sz} {conn_type.split(' ')[0]}"; outlet_str = f"{sel_outlet_sz} {conn_type.split(' ')[0]}"
 
@@ -329,11 +333,22 @@ if selected_fluid == "Custom (Manual Input)":
         u_SG = st.sidebar.number_input("SG", value=1.0)
 
 W_base = 0.0
-# Only convert input flow if we are in Sizing Mode
+# --- UPDATED: Conversion Logic for Sizing Mode ---
 if calc_mode == "Sizing (Find Orifice)":
     if unit_W == "kg/hr": W_base = raw_W
     elif unit_W == "lb/hr": W_base = raw_W * 0.453592
     elif unit_W == "Nm3/hr": W_base = (raw_W / 22.414) * u_Mw if u_Mw > 0 else 0
+    elif unit_W == "Sm3/hr": W_base = (raw_W / 23.64) * u_Mw if u_Mw > 0 else 0 # Standard Metric (15C)
+    elif unit_W == "SCFM": 
+        # SCFM -> SCFH -> Mass
+        # 1 lbmol = 379.5 SCF
+        # Mass (lb/hr) = (SCFH / 379.5) * MW
+        scfh = raw_W * 60
+        w_lb_hr = (scfh / 379.5) * u_Mw if u_Mw > 0 else 0
+        W_base = w_lb_hr * 0.453592
+    elif unit_W == "SCFH":
+        w_lb_hr = (raw_W / 379.5) * u_Mw if u_Mw > 0 else 0
+        W_base = w_lb_hr * 0.453592
     elif unit_W == "LPM": W_base = (raw_W * 0.06 / 22.414) * u_Mw if u_Mw > 0 else 0
     elif unit_W == "m3/hr": W_base = raw_W * 1000 * u_SG
     elif unit_W == "LPH": W_base = raw_W * u_SG
@@ -348,7 +363,7 @@ if st.button("🚀 Calculate & Generate Datasheet"):
     try:
         if bellows_recommended and not bellows: st.warning("⚠️ WARNING: Back Pressure > 10% but 'Bellows Required' is NOT checked.")
         
-        P1_sizing = (P1_abs - atm) * 1.10 + atm 
+        P1_sizing = (P1_abs - atm) * op_mult + atm 
         dP = P1_sizing - P2_abs
         
         # --- CALCULATION LOGIC ---
@@ -381,7 +396,7 @@ if st.button("🚀 Calculate & Generate Datasheet"):
                 eta_c = calculate_eta_c(u_omega); P_cf = eta_c * P1_sizing; is_critical = P2_abs < P_cf
                 calc_note = f"Flow is {'Critical' if is_critical else 'Subcritical'} (eta_c={eta_c:.3f})"
                 v_0 = 1.0 / u_rho; P0 = P1_sizing * 1000
-                G_si = eta_c * math.sqrt((P0/v_0)/u_omega) if is_critical else eta_c * math.sqrt((P0/v_0)/u_omega) # Simplified critical assumption for sizing safety
+                G_si = eta_c * math.sqrt((P0/v_0)/u_omega) if is_critical else eta_c * math.sqrt((P0/v_0)/u_omega) # Simplified
                 W_kg_s = W_base / 3600; A_m2 = W_kg_s / (G_si * 0.9 * Kd * Kb * Kc); A_final = A_m2 * 1e6
                 formula_used = "A = W / (G_flux * Kd * Kb * Kc * 0.9)"
 
@@ -430,11 +445,20 @@ if st.button("🚀 Calculate & Generate Datasheet"):
                 W_capacity = W_kg_s * 3600
                 formula_used = "W = A * G_flux * Kd * Kb * Kc * 0.9"
 
-            # Convert W_capacity (kg/hr) to selected Unit
+            # --- UPDATED: Capacity Mode Conversion ---
             W_display = 0.0
             if unit_W == "kg/hr": W_display = W_capacity
             elif unit_W == "lb/hr": W_display = W_capacity / 0.453592
             elif unit_W == "Nm3/hr": W_display = (W_capacity / u_Mw) * 22.414 if u_Mw > 0 else 0
+            elif unit_W == "Sm3/hr": W_display = (W_capacity / u_Mw) * 23.64 if u_Mw > 0 else 0
+            elif unit_W == "SCFM":
+                # kg/hr -> lb/hr -> SCFH -> SCFM
+                w_lb = W_capacity / 0.453592
+                scfh = (w_lb / u_Mw) * 379.5 if u_Mw > 0 else 0
+                W_display = scfh / 60
+            elif unit_W == "SCFH":
+                w_lb = W_capacity / 0.453592
+                W_display = (w_lb / u_Mw) * 379.5 if u_Mw > 0 else 0
             elif unit_W == "LPM": W_display = ((W_capacity / u_Mw) * 22.414) / 0.06 # approx
             elif unit_W == "m3/hr": W_display = (W_capacity / u_SG) / 1000
             elif unit_W == "LPH": W_display = W_capacity / u_SG
@@ -468,10 +492,9 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         # --- DATA PACKING ---
         proj_d = {"Customer": customer, "Tag No": tag_no, "Enquiry No": enquiry_no, "Offer No": offer_no, "Description": desc, "Service": service_type}
         
-        # Adjust Process Data Label based on Mode
         flow_label = "Required Flow" if calc_mode == "Sizing (Find Orifice)" else "Rated Capacity"
         
-        proc_d = {"Fluid": selected_fluid, flow_label: f"{raw_W:.2f} {unit_W}", "Set Pressure": f"{raw_P1} {unit_P1}", "Constant Back Pressure": f"{raw_BP_const} {unit_BP_const}", "Variable Back Pressure": f"{raw_BP_var} {unit_BP_var}", "Total Back Pressure": f"{raw_BP_const+raw_BP_var:.2f} {unit_BP_const}", "Relieving Temp": f"{raw_T1} {unit_T1}", "Overpressure": "10% Accumulation"}
+        proc_d = {"Fluid": selected_fluid, flow_label: f"{raw_W:.2f} {unit_W}", "Set Pressure": f"{raw_P1} {unit_P1}", "Constant Back Pressure": f"{raw_BP_const} {unit_BP_const}", "Variable Back Pressure": f"{raw_BP_var} {unit_BP_var}", "Total Back Pressure": f"{raw_BP_const+raw_BP_var:.2f} {unit_BP_const}", "Relieving Temp": f"{raw_T1} {unit_T1}", "Overpressure": f"{overpressure_pct} Accumulation"}
         
         prop_d = {}; prop_d.update({"Kd": f"{Kd}", "Kb": f"{Kb}", "Kc": f"{Kc}"})
         if service_type == "Two-Phase": prop_d.update({"Quality (x)": f"{input_quality}", "Omega (w)": f"{u_omega:.3f}", "Inlet Density": f"{u_rho:.1f} kg/m3"})
