@@ -68,7 +68,9 @@ st.sidebar.markdown("---")
 # --- DATA ---
 flange_limits_barg = {"150#": 19.6, "300#": 51.1, "600#": 102.1, "900#": 153.2, "1500#": 255.3, "2500#": 425.5}
 api_526_sizes = {'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'), 'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'), 'K': ('3"', '4"'), 'L': ('3"', '4"'), 'M': ('4"', '6"'), 'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'), 'R': ('6"', '8"'), 'T': ('8"', '10"')}
-api_orifices = {'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
+
+# FULL ORIFICE LIST (Includes B & C for Non-API)
+all_orifices = {'B': 28, 'C': 57, 'D': 71, 'E': 126, 'F': 198, 'G': 325, 'H': 506, 'J': 830, 'K': 1186, 'L': 1841, 'M': 2323, 'N': 2800, 'P': 4116, 'Q': 7129, 'R': 10323, 'T': 16774}
 
 # --- API 526 CENTER-TO-FACE DIMENSIONS (mm) ---
 api_526_dims = {
@@ -206,7 +208,7 @@ if calc_mode == "Sizing (Find Orifice)":
 else:
     # Capacity Mode
     st.sidebar.markdown("**Select Orifice to find Capacity:**")
-    sel_orifice_cap = st.sidebar.selectbox("Designated Orifice", list(api_orifices.keys()))
+    sel_orifice_cap = st.sidebar.selectbox("Designated Orifice", list(all_orifices.keys()))
     unit_W = st.sidebar.selectbox("Output Flow Unit", flow_units)
 
 press_units = ["barg", "psig", "kPag", "kg/cm2g"]
@@ -297,7 +299,6 @@ if valve_standard == "API 526 (Flanged)":
     inlet_str = f"{inlet_rating} {conn_type}"; outlet_str = f"{outlet_rating} {conn_type}"
 else:
     c_sz1, c_sz2 = st.sidebar.columns(2)
-    # --- FIX: Pass options explicitly to avoid TypeErrors ---
     sel_inlet_sz = c_sz1.selectbox("Inlet Size", options=["1/2\"", "3/4\"", "1\"", "1 1/2\"", "2\""], index=0)
     sel_outlet_sz = c_sz2.selectbox("Outlet Size", options=["1/2\"", "3/4\"", "1\"", "1 1/2\"", "2\""], index=1)
     conn_type = st.sidebar.selectbox("Connection Type", ["NPT (Male x Female)", "NPT (Female x Female)", "BSP", "Socket Weld"])
@@ -338,11 +339,8 @@ if calc_mode == "Sizing (Find Orifice)":
     if unit_W == "kg/hr": W_base = raw_W
     elif unit_W == "lb/hr": W_base = raw_W * 0.453592
     elif unit_W == "Nm3/hr": W_base = (raw_W / 22.414) * u_Mw if u_Mw > 0 else 0
-    elif unit_W == "Sm3/hr": W_base = (raw_W / 23.64) * u_Mw if u_Mw > 0 else 0 # Standard Metric (15C)
+    elif unit_W == "Sm3/hr": W_base = (raw_W / 23.64) * u_Mw if u_Mw > 0 else 0 
     elif unit_W == "SCFM": 
-        # SCFM -> SCFH -> Mass
-        # 1 lbmol = 379.5 SCF
-        # Mass (lb/hr) = (SCFH / 379.5) * MW
         scfh = raw_W * 60
         w_lb_hr = (scfh / 379.5) * u_Mw if u_Mw > 0 else 0
         W_base = w_lb_hr * 0.453592
@@ -402,8 +400,26 @@ if st.button("🚀 Calculate & Generate Datasheet"):
 
             # Select Orifice
             sel_orf = "N/A"; sel_area = 0; sel_letter = ""
-            for l, a in api_orifices.items():
-                if a >= A_final: sel_orf = f"{l} ({a} mm²)"; sel_area = a; sel_letter = l; break
+            
+            # --- UPDATED SELECTION LOGIC ---
+            # API 526 Valves: Only select from D to T (api_526_sizes)
+            # Non-API Valves: Can select from B to T (all_orifices)
+            
+            # Filter available orifices based on standard
+            if valve_standard == "API 526 (Flanged)":
+                # Filter dictionary to only include keys that are in api_526_sizes
+                available_orifices = {k: v for k, v in all_orifices.items() if k in api_526_sizes}
+            else:
+                # Use full dictionary
+                available_orifices = all_orifices
+            
+            # Loop through the filtered list
+            for l, a in available_orifices.items():
+                if a >= A_final: 
+                    sel_orf = f"{l} ({a} mm²)"
+                    sel_area = a
+                    sel_letter = l
+                    break
             
             # For display
             disp_req_area = f"{A_final:.2f} mm²"
@@ -412,7 +428,7 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         else:
             # REVERSE: Find Capacity
             sel_letter = sel_orifice_cap
-            sel_area = api_orifices[sel_letter]
+            sel_area = all_orifices[sel_letter]
             sel_orf = f"{sel_letter} ({sel_area} mm²)"
             A_final = sel_area # For logic consistency
             
@@ -429,8 +445,6 @@ if st.button("🚀 Calculate & Generate Datasheet"):
 
             elif service_type == "Liquid":
                 if dP <= 0: st.error("Back Pres > Set Pres!"); st.stop()
-                # A = (11.78 * Q_lpm) / (...) * sqrt(...)
-                # Q_lpm = (A * Kd * Kb * Kc * Kv * sqrt(dP)) / (11.78 * sqrt(SG))
                 Q_lpm_cap = (sel_area * Kd * Kb * Kc * Kv * np.sqrt(dP)) / (11.78 * np.sqrt(u_SG))
                 W_capacity = Q_lpm_cap * 60 * u_SG # kg/hr
                 formula_used = "Q = (A * Kd * Kw * Kc * Kv * 11.78 * sqrt(dP/G))"
@@ -452,7 +466,6 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             elif unit_W == "Nm3/hr": W_display = (W_capacity / u_Mw) * 22.414 if u_Mw > 0 else 0
             elif unit_W == "Sm3/hr": W_display = (W_capacity / u_Mw) * 23.64 if u_Mw > 0 else 0
             elif unit_W == "SCFM":
-                # kg/hr -> lb/hr -> SCFH -> SCFM
                 w_lb = W_capacity / 0.453592
                 scfh = (w_lb / u_Mw) * 379.5 if u_Mw > 0 else 0
                 W_display = scfh / 60
