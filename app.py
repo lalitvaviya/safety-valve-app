@@ -5,9 +5,11 @@ import math
 import io
 import os
 import re
+import json
 
 # --- 1. CONFIGURATION & IMPORTS ---
 st.set_page_config(page_title="SGM Valve Sizing Pro", layout="wide", page_icon="🛡️")
+HISTORY_FILE = "sgm_history.json"
 
 # --- 2. AUTHENTICATION ---
 USERS = {
@@ -17,8 +19,49 @@ USERS = {
 
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'user_role' not in st.session_state: st.session_state.user_role = None
-if 'project_log' not in st.session_state: st.session_state.project_log = [] 
 if 'last_results' not in st.session_state: st.session_state.last_results = None
+
+# --- PERSISTENCE FUNCTIONS (NEW) ---
+def load_history():
+    """Loads history from JSON and regenerates PDF bytes on the fly"""
+    if not os.path.exists(HISTORY_FILE):
+        return []
+    
+    try:
+        with open(HISTORY_FILE, 'r') as f:
+            data = json.load(f)
+            
+        # Re-generate PDF bytes for UI buttons (since bytes can't be saved in JSON)
+        # This ensures download buttons work immediately upon loading
+        valid_data = []
+        for item in data:
+            if 'data' in item: # Check if it has the data pack
+                try:
+                    # Regenerate PDF from stored data
+                    pdf_bytes = generate_single_pdf(item['data'])
+                    item['PDF'] = pdf_bytes
+                    valid_data.append(item)
+                except:
+                    continue # Skip corrupted items
+        return valid_data
+    except Exception as e:
+        return []
+
+def save_history_to_file():
+    """Saves the current session state log to the JSON file"""
+    # We must exclude the 'PDF' bytes key because JSON cannot save binary data
+    serializable_list = []
+    for item in st.session_state.project_log:
+        # Create a copy excluding 'PDF'
+        clean_item = {k: v for k, v in item.items() if k != 'PDF'}
+        serializable_list.append(clean_item)
+        
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(serializable_list, f, indent=4)
+
+# Load history into Session State on startup if empty
+if 'project_log' not in st.session_state or not st.session_state.project_log:
+    st.session_state.project_log = load_history()
 
 def login():
     st.markdown("## 🔐 SGM Sizing Login")
@@ -30,6 +73,8 @@ def login():
             if u in USERS and USERS[u]['password'] == p:
                 st.session_state.authenticated = True
                 st.session_state.user_role = USERS[u]['role']
+                # Refresh data from disk on login
+                st.session_state.project_log = load_history()
                 st.rerun()
             else:
                 st.error("Invalid Username or Password")
@@ -156,7 +201,9 @@ def generate_combined_pdf(all_logs):
 # ==========================================
 with st.sidebar:
     st.write(f"👤 **{st.session_state.user_role.upper()} MODE**")
-    if st.button("Log Out"): st.session_state.authenticated = False; st.rerun()
+    if st.button("Log Out"): 
+        st.session_state.authenticated = False
+        st.rerun()
     st.markdown("---")
 
 st.sidebar.markdown("## ⚙️ Sizing Inputs")
@@ -165,7 +212,7 @@ calc_mode = st.sidebar.radio("Mode", ["Sizing (Find Orifice)", "Capacity (Find F
 st.sidebar.header("1. General Detail")
 customer = st.sidebar.text_input("Customer Name", "SGM Client")
 tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
-offer_no = st.sidebar.text_input("Offer No", "OFF-001") # KEY FILTER FIELD
+offer_no = st.sidebar.text_input("Offer No", "OFF-001")
 enquiry_no = st.sidebar.text_input("Enquiry No", "ENQ-001")
 valve_standard = st.sidebar.radio("Select Valve Standard", ["API 526 (Flanged)", "Non-API (TR-01)"])
 def_model = "SV-526" if valve_standard == "API 526 (Flanged)" else "TR-01"
@@ -373,13 +420,15 @@ if st.button("🚀 Calculate & Generate Datasheet"):
     safe = {"Spring": spring_txt, "Spring Load": f"{force_spr:.1f} N", "React Force": f"{force_react:.1f} N", "Noise": noise}
     fluid_d = {"MW": u_Mw, "k": u_k, "SG": f"{u_rho/1000:.3f}", "Kd": Kd}
     
-    # Store full Data for PDF Generation
     full_data = {'proj': proj, 'proc': proc, 'fluid': fluid_d, 'mech': mech, 'res': res, 'safety': safe}
     pdf_b = generate_single_pdf(full_data)
     
     st.session_state.last_results = {"cap": disp_cap, "unit": unit_W, "orf": sel_orf, "spr": spring_txt}
     # Log Entry now includes 'Offer' for filtering
     st.session_state.project_log.append({"Tag": tag_no, "Offer": offer_no, "Orifice": sel_orf, "PDF": pdf_b, "data": full_data})
+    
+    # Auto-save to persistence file
+    save_history_to_file()
 
 # --- RESULTS & HISTORY ---
 if st.session_state.last_results:
@@ -388,6 +437,8 @@ if st.session_state.last_results:
     st.metric("Orifice / Spring", f"{r['orf']} / {r['spr']}")
     if st.session_state.user_role == 'admin':
         st.download_button("📥 Datasheet", st.session_state.project_log[-1]['PDF'], f"{tag_no}.pdf", "application/pdf")
+    else:
+        st.warning("Download Restricted")
 
 st.markdown("---")
 st.markdown("### 🗃️ Project History")
