@@ -16,13 +16,43 @@ try:
 except ImportError:
     COOLPROP_AVAILABLE = False
 
+# --- 2. AUTHENTICATION & SESSION STATE ---
+# User Database: username -> {password, role}
+USERS = {
+    "admin": {"password": "admin123", "role": "admin"},   # Can Download
+    "user":  {"password": "user123",  "role": "viewer"}   # Cannot Download
+}
+
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'user_role' not in st.session_state: st.session_state.user_role = None
 if 'project_log' not in st.session_state: st.session_state.project_log = []
 if 'last_results' not in st.session_state: st.session_state.last_results = None
 
-# ==========================================
-# 2. DATABASES & RULES
-# ==========================================
+def login():
+    st.markdown("## 🔐 SGM Sizing Login")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        if st.button("Log In"):
+            if u in USERS and USERS[u]['password'] == p:
+                st.session_state.authenticated = True
+                st.session_state.user_role = USERS[u]['role']
+                st.rerun()
+            else:
+                st.error("Invalid Username or Password")
 
+def logout():
+    st.session_state.authenticated = False
+    st.session_state.user_role = None
+    st.rerun()
+
+# Stop execution if not logged in
+if not st.session_state.authenticated:
+    login()
+    st.stop()
+
+# --- 3. DATABASES & HELPERS ---
 FLUID_DB = {
     "Air": {"mw": 28.96, "k": 1.40}, "Nitrogen": {"mw": 28.01, "k": 1.40},
     "Oxygen": {"mw": 32.00, "k": 1.40}, "Argon": {"mw": 39.95, "k": 1.67},
@@ -51,14 +81,12 @@ FLANGE_LIMITS = {
 
 API_526_SIZES = {'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'), 'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'), 'K': ('3"', '4"'), 'L': ('3"', '4"'), 'M': ('4"', '6"'), 'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'), 'R': ('6"', '8"'), 'T': ('8"', '10"')}
 
-# --- HELPER: CLEAN TEXT ---
 def clean_text(text):
     if not isinstance(text, str): return str(text)
     replacements = {"°": "deg", "²": "2", "³": "3", "±": "+/-", "≥": ">=", "≤": "<="}
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- CSV READER ---
 def get_spring_from_file(file_name, orifice, set_pressure):
     if not os.path.exists(file_name): return f"Err: File {file_name} missing", 0, 0
     try:
@@ -74,9 +102,7 @@ def get_spring_from_file(file_name, orifice, set_pressure):
         return "Out of Spring Range", 0, 0
     except Exception as e: return f"CSV Error: {str(e)}", 0, 0
 
-# ==========================================
-# 3. PDF GENERATOR
-# ==========================================
+# --- 4. PDF GENERATOR ---
 class PDF(FPDF):
     def header(self):
         try: self.image('logo.png', 10, 8, 33) 
@@ -116,8 +142,13 @@ def create_datasheet(proj, proc, fluid, mech, res, safety):
     return pdf.output(dest='S').encode('latin-1', 'ignore')
 
 # ==========================================
-# 4. APP UI
+# 5. APP UI (SIDEBAR)
 # ==========================================
+with st.sidebar:
+    st.write(f"👤 **{st.session_state.user_role.upper()} MODE**")
+    if st.button("Log Out"): logout()
+    st.markdown("---")
+
 st.sidebar.markdown("## ⚙️ Sizing Inputs")
 calc_mode = st.sidebar.radio("Mode", ["Sizing (Find Orifice)", "Capacity (Find Flow)"], horizontal=True)
 
@@ -127,8 +158,6 @@ customer = st.sidebar.text_input("Customer Name", "SGM Client")
 tag_no = st.sidebar.text_input("Tag Number", "PSV-1001")
 offer_no = st.sidebar.text_input("Offer No", "OFF-001")
 enquiry_no = st.sidebar.text_input("Enquiry No", "ENQ-001")
-
-# --- MODEL NO LOGIC ---
 valve_standard = st.sidebar.radio("Select Valve Standard", ["API 526 (Flanged)", "Non-API (TR-01)"])
 def_model = "SV-526" if valve_standard == "API 526 (Flanged)" else "TR-01"
 model_no = st.sidebar.text_input("Model No", def_model)
@@ -137,23 +166,18 @@ st.sidebar.markdown("---")
 # 2. Fluid
 st.sidebar.header("2. Fluid Selection")
 service_type = st.sidebar.selectbox("Service Type", ["Gas/Vapor", "Liquid", "Steam", "Two-Phase"])
-gas_list = ["Custom", "Air", "Nitrogen", "Oxygen", "Argon", "Natural Gas", "CO2", "Ammonia", "Chlorine", "LPG", "Propane", "Ethane"]
-liq_list = ["Custom", "Water", "Oil (Generic)", "LDO"]
-fluids = gas_list if service_type == "Gas/Vapor" else (liq_list if service_type == "Liquid" else ["Custom"])
+fluids = ["Custom"]
+if service_type == "Gas/Vapor": fluids = ["Custom", "Air", "Nitrogen", "Oxygen", "Argon", "Natural Gas", "CO2", "Ammonia", "Chlorine", "LPG", "Propane", "Ethane"]
+elif service_type == "Liquid": fluids = ["Custom", "Water", "Oil (Generic)", "LDO"]
 selected_fluid = st.sidebar.selectbox("Select Fluid", fluids)
 
 st.sidebar.markdown("---")
 # 3. Process
 st.sidebar.header("3. Process Conditions")
 
-# --- FLOW UNIT LOGIC ---
 common_units = ["kg/hr", "lb/hr", "LPM", "LPH", "GPM"]
-gas_units = ["Sm3/hr", "Nm3/hr", "SCFM", "SCFH"] + common_units
-liq_units = common_units # Filtered
-
-if service_type == "Gas/Vapor": unit_options = gas_units
-elif service_type == "Liquid": unit_options = liq_units
-else: unit_options = common_units
+unit_options = common_units
+if service_type == "Gas/Vapor": unit_options = ["Sm3/hr", "Nm3/hr", "SCFM", "SCFH"] + common_units
 
 raw_W = 0.0; designated_orf = "D"
 if calc_mode.startswith("Sizing"):
@@ -177,7 +201,7 @@ raw_T1 = st.sidebar.number_input("Temperature", value=45.0)
 unit_T1 = st.sidebar.selectbox("Unit", ["°C", "°F"], key="u_t1")
 vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", 0.02) if service_type == "Liquid" else 0.0
 
-# Properties & Coeffs
+# Properties
 st.sidebar.markdown("---")
 u_Mw = 28.96; u_k = 1.4; u_rho = 997.0; u_visc = 1.0; u_Z = 0.95
 if selected_fluid in FLUID_DB:
@@ -193,7 +217,7 @@ with st.sidebar.expander("4. Coefficients"):
     Kd = st.number_input("Kd", 0.975 if service_type!="Liquid" else 0.65)
     Kb = st.number_input("Kb", 1.0); Kc = st.number_input("Kc", 1.0)
 
-# --- 5. MECHANICAL LOGIC ---
+# 5. Mechanical
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical")
 c_m1, c_m2 = st.sidebar.columns(2)
@@ -203,9 +227,7 @@ disc_mat = c_m3.selectbox("Disc", ["SS316", "SS304"]); spring_mat = c_m4.selectb
 
 st.sidebar.subheader("End Connections")
 P_set_bar = raw_P1 / 14.5 if unit_P1 == "psig" else (raw_P1 * 0.98 if unit_P1 == "kg/cm2g" else raw_P1)
-
-conn_str = ""
-manual_dim_in = 0; manual_dim_out = 0
+conn_str = ""; manual_dim_in = 0; manual_dim_out = 0
 
 if valve_standard == "API 526 (Flanged)":
     c_conn1, c_conn2 = st.sidebar.columns(2)
@@ -214,56 +236,37 @@ if valve_standard == "API 526 (Flanged)":
     if P_set_bar > limit: st.sidebar.error(f"🚨 Set P ({P_set_bar:.1f} bar) exceeds {inlet_rating} limit!")
     outlet_rating = c_conn2.selectbox("Outlet Rating", ["150#", "300#"], index=0)
     conn_str = f"{inlet_rating} x {outlet_rating} RF"
-
-else: # NON-API LOGIC
-    # NEW: Selection Type
+else: # NON-API
     conn_style = st.sidebar.radio("Connection Style", ["Threaded / Socket Weld", "Flanged"], horizontal=True)
-    
-    # Logic to guess target orifice for filtering
-    target_orf = designated_orf if calc_mode.startswith("Capacity") else st.sidebar.selectbox("Select Target Orifice (For Conn Check)", ["B","D","E","F","G"], help="Pick the expected orifice to filter valid connection sizes.")
-    
-    # Orifice Pressure Check
+    target_orf = designated_orf if calc_mode.startswith("Capacity") else st.sidebar.selectbox("Select Target Orifice (For Conn Check)", ["B","D","E","F","G"])
     max_p = ORIFICE_DATA[target_orf]['max_p']
     if P_set_bar > max_p: st.sidebar.error(f"⛔ Orifice {target_orf} Max Pressure is {max_p} bar!")
 
     if conn_style.startswith("Threaded"):
-        # Simple Threaded Logic
         sz_list = ["1/2\"", "3/4\"", "1\"", "1-1/2\"", "2\""]
         c1, c2, c3 = st.sidebar.columns(3)
-        in_sz = c1.selectbox("Inlet", sz_list)
-        out_sz = c2.selectbox("Outlet", sz_list)
-        c_type = c3.selectbox("Type", ["NPT (M x F)", "NPT (F x F)", "BSP", "SW"])
+        in_sz = c1.selectbox("Inlet", sz_list); out_sz = c2.selectbox("Outlet", sz_list); c_type = c3.selectbox("Type", ["NPT (M x F)", "NPT (F x F)", "BSP", "SW"])
         conn_str = f"{in_sz} x {out_sz} {c_type}"
     else:
-        # COMPLEX FLANGED LOGIC
         st.sidebar.caption(f"Filtering for Orifice: {target_orf}")
-        
-        # 1. Filter Inlet Sizes
         valid_inlets = []
         if target_orf in ["B", "D"]: valid_inlets.extend(["1/2\"", "3/4\"", "1\""])
         if target_orf == "E": valid_inlets.extend(["3/4\"", "1\""])
         if target_orf in ["F", "G"]: valid_inlets.extend(["1\"", "1-1/2\""])
         in_sz = st.sidebar.selectbox("Inlet Size", sorted(list(set(valid_inlets))))
-        
-        # 2. Filter Outlet Sizes (Based on Pairings)
         valid_outlets = []
         if in_sz == "1/2\"": valid_outlets = ["1/2\"", "3/4\"", "1\""]
         elif in_sz == "3/4\"": valid_outlets = ["3/4\"", "1\""]
         elif in_sz == "1\"": valid_outlets = ["1\"", "1-1/2\""]
         elif in_sz == "1-1/2\"": valid_outlets = ["2\" (Std)"]
         out_sz = st.sidebar.selectbox("Outlet Size", valid_outlets)
-        
-        # 3. Filter Ratings (Pressure Check)
         avail_in_ratings = [r for r, lim in FLANGE_LIMITS.items() if lim >= P_set_bar]
-        if target_orf == "G" and P_set_bar < 20: 
-             avail_in_ratings = [r for r in avail_in_ratings if r in ["150#", "300#"]]
-        
+        if target_orf == "G" and P_set_bar < 20: avail_in_ratings = [r for r in avail_in_ratings if r in ["150#", "300#"]]
         c_r1, c_r2 = st.sidebar.columns(2)
         in_rate = c_r1.selectbox("Inlet Flange", avail_in_ratings)
         out_rate = c_r2.selectbox("Outlet Flange", ["150#", "300#", "600#"])
-        
         conn_str = f"{in_sz} {in_rate} x {out_sz} {out_rate} RF"
-
+    
     st.sidebar.markdown("**Manual Dimensions**")
     c_d1, c_d2 = st.sidebar.columns(2)
     manual_dim_in = c_d1.number_input("Inlet C-to-F", 0); manual_dim_out = c_d2.number_input("Outlet C-to-F", 0)
@@ -272,7 +275,7 @@ lever_type = st.sidebar.selectbox("Lever", ["None", "Packed", "Open"])
 bellows_req = st.sidebar.checkbox("Bellows?", False)
 
 # ==========================================
-# 5. EXECUTION
+# 6. MAIN EXECUTION
 # ==========================================
 st.title("🛡️ SGM Valves - Sizing Pro")
 st.markdown("### 📊 Sizing Dashboard")
@@ -371,12 +374,31 @@ if st.button("🚀 Calculate & Generate Datasheet"):
     st.session_state.last_results = {"cap": disp_cap, "unit": unit_W, "orf": sel_orf, "spr": spring_txt}
     st.session_state.project_log.append({"Tag": tag_no, "Orifice": sel_orf, "PDF": pdf_b})
 
+# --- RESULTS & HISTORY ---
 if st.session_state.last_results:
     r = st.session_state.last_results
     st.success(f"Rated Capacity: {r['cap']:.2f} {r['unit']}")
     st.metric("Orifice / Spring", f"{r['orf']} / {r['spr']}")
-    st.download_button("📥 Datasheet", st.session_state.project_log[-1]['PDF'], f"{tag_no}.pdf")
+    if st.session_state.user_role == 'admin':
+        st.download_button("📥 Datasheet", st.session_state.project_log[-1]['PDF'], f"{tag_no}.pdf", "application/pdf")
+    else:
+        st.warning("Download Restricted (Viewer Mode)")
 
 st.markdown("---")
+st.markdown("### 🗃️ Project History")
+
 if st.session_state.project_log:
-    st.table(pd.DataFrame(st.session_state.project_log).drop(columns=["PDF"]))
+    # Show table
+    disp_df = pd.DataFrame(st.session_state.project_log).drop(columns=["PDF"])
+    st.table(disp_df)
+    
+    # Bulk Download (Only Admin)
+    if st.session_state.user_role == 'admin':
+        if st.button("📦 Download All as ZIP"):
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                for item in st.session_state.project_log:
+                    zf.writestr(f"{item['Tag']}.pdf", item['PDF'])
+            st.download_button("⬇️ Click to Download ZIP", zip_buffer.getvalue(), "Project.zip", "application/zip")
+    else:
+        st.info("Log in as Admin to download project history.")
