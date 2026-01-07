@@ -406,4 +406,21 @@ if st.session_state.last_results:
     r = st.session_state.last_results
     st.success(f"Rated Capacity: {r['cap']:.2f} {r['unit']}")
     st.metric("Orifice / Spring", f"{r['orf']} / {r['spr']}")
-    if st.session_
+    if st.session_state.user_role == 'admin':
+        st.download_button("📥 Datasheet", st.session_state.project_log[-1]['PDF'], f"{tag_no}.pdf", "application/pdf")
+    else:
+        st.warning("Download Restricted")
+
+st.markdown("---")
+st.markdown("### 🗃️ Project History")
+
+if st.session_state.project_log:
+    # Display table of history (hide internal data keys)
+    disp_log = [{k: v for k, v in item.items() if k not in ['PDF', 'data']} for item in st.session_state.project_log]
+    st.table(pd.DataFrame(disp_log))
+    
+    # Admin Download Area
+    if st.session_state.user_role == 'admin':
+        if st.button("📦 Download Project Report (Single PDF)"):
+            combined_pdf_bytes = generate_combined_pdf(st.session_state.project_log)
+            st.download_button("⬇️ Click to Download Combined Report", combined_pdf_bytes, "Project_Report.pdf", "application/pdf")
