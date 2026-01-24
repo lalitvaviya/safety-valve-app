@@ -21,77 +21,24 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'user_role' not in st.session_state: st.session_state.user_role = None
 if 'last_results' not in st.session_state: st.session_state.last_results = None
 
-# --- PERSISTENCE FUNCTIONS (NEW) ---
-def load_history():
-    """Loads history from JSON and regenerates PDF bytes on the fly"""
-    if not os.path.exists(HISTORY_FILE):
-        return []
-    
-    try:
-        with open(HISTORY_FILE, 'r') as f:
-            data = json.load(f)
-            
-        # Re-generate PDF bytes for UI buttons (since bytes can't be saved in JSON)
-        # This ensures download buttons work immediately upon loading
-        valid_data = []
-        for item in data:
-            if 'data' in item: # Check if it has the data pack
-                try:
-                    # Regenerate PDF from stored data
-                    pdf_bytes = generate_single_pdf(item['data'])
-                    item['PDF'] = pdf_bytes
-                    valid_data.append(item)
-                except:
-                    continue # Skip corrupted items
-        return valid_data
-    except Exception as e:
-        return []
-
-def save_history_to_file():
-    """Saves the current session state log to the JSON file"""
-    # We must exclude the 'PDF' bytes key because JSON cannot save binary data
-    serializable_list = []
-    for item in st.session_state.project_log:
-        # Create a copy excluding 'PDF'
-        clean_item = {k: v for k, v in item.items() if k != 'PDF'}
-        serializable_list.append(clean_item)
-        
-    with open(HISTORY_FILE, 'w') as f:
-        json.dump(serializable_list, f, indent=4)
-
-# Load history into Session State on startup if empty
-if 'project_log' not in st.session_state or not st.session_state.project_log:
-    st.session_state.project_log = load_history()
-
-def login():
-    st.markdown("## 🔐 SGM Sizing Login")
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
-        if st.button("Log In"):
-            if u in USERS and USERS[u]['password'] == p:
-                st.session_state.authenticated = True
-                st.session_state.user_role = USERS[u]['role']
-                # Refresh data from disk on login
-                st.session_state.project_log = load_history()
-                st.rerun()
-            else:
-                st.error("Invalid Username or Password")
-
-if not st.session_state.authenticated:
-    login()
-    st.stop()
-
 # --- 3. DATABASES & CONSTANTS ---
+# Added Hydrogen here
 FLUID_DB = {
-    "Air": {"mw": 28.96, "k": 1.40}, "Nitrogen": {"mw": 28.01, "k": 1.40},
-    "Oxygen": {"mw": 32.00, "k": 1.40}, "Argon": {"mw": 39.95, "k": 1.67},
-    "Natural Gas": {"mw": 19.00, "k": 1.27}, "CO2": {"mw": 44.01, "k": 1.30},
-    "Ammonia": {"mw": 17.03, "k": 1.31}, "Chlorine": {"mw": 70.90, "k": 1.35},
-    "LPG": {"mw": 51.00, "k": 1.13}, "Propane": {"mw": 44.10, "k": 1.13},
-    "Ethane": {"mw": 30.07, "k": 1.19}, "Water": {"rho": 997.0, "visc": 1.0},
-    "Oil (Generic)": {"rho": 850.0, "visc": 10.0}, "LDO": {"rho": 870.0, "visc": 3.5}
+    "Air": {"mw": 28.96, "k": 1.40}, 
+    "Nitrogen": {"mw": 28.01, "k": 1.40},
+    "Hydrogen": {"mw": 2.02, "k": 1.41},  # <--- NEW
+    "Oxygen": {"mw": 32.00, "k": 1.40}, 
+    "Argon": {"mw": 39.95, "k": 1.67},
+    "Natural Gas": {"mw": 19.00, "k": 1.27}, 
+    "CO2": {"mw": 44.01, "k": 1.30},
+    "Ammonia": {"mw": 17.03, "k": 1.31}, 
+    "Chlorine": {"mw": 70.90, "k": 1.35},
+    "LPG": {"mw": 51.00, "k": 1.13}, 
+    "Propane": {"mw": 44.10, "k": 1.13},
+    "Ethane": {"mw": 30.07, "k": 1.19}, 
+    "Water": {"rho": 997.0, "visc": 1.0},
+    "Oil (Generic)": {"rho": 850.0, "visc": 10.0}, 
+    "LDO": {"rho": 870.0, "visc": 3.5}
 }
 
 ORIFICE_DATA = {
@@ -111,6 +58,8 @@ FLANGE_LIMITS = {
 }
 
 API_526_SIZES = {'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'), 'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'), 'K': ('3"', '4"'), 'L': ('3"', '4"'), 'M': ('4"', '6"'), 'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'), 'R': ('6"', '8"'), 'T': ('8"', '10"')}
+
+# --- 4. HELPERS & PDF FUNCTIONS ---
 
 def clean_text(text):
     if not isinstance(text, str): return str(text)
@@ -142,7 +91,6 @@ def get_spring_from_file(file_name, orifice, set_pressure):
         return "Out of Spring Range", 0, 0
     except Exception as e: return f"CSV Error: {str(e)}", 0, 0
 
-# --- 4. PDF ENGINE ---
 class PDF(FPDF):
     def header(self):
         try: self.image('logo.png', 10, 8, 33) 
@@ -196,14 +144,56 @@ def generate_combined_pdf(all_logs):
         render_datasheet_page(pdf, log_item['data'])
     return pdf.output(dest='S').encode('latin-1', 'ignore')
 
+# --- 5. PERSISTENCE (JSON) ---
+def load_history():
+    if not os.path.exists(HISTORY_FILE): return []
+    try:
+        with open(HISTORY_FILE, 'r') as f: data = json.load(f)
+        valid_data = []
+        for item in data:
+            if 'data' in item:
+                try:
+                    pdf_bytes = generate_single_pdf(item['data'])
+                    item['PDF'] = pdf_bytes
+                    valid_data.append(item)
+                except: continue
+        return valid_data
+    except: return []
+
+def save_history_to_file():
+    serializable_list = []
+    for item in st.session_state.project_log:
+        clean_item = {k: v for k, v in item.items() if k != 'PDF'}
+        serializable_list.append(clean_item)
+    with open(HISTORY_FILE, 'w') as f: json.dump(serializable_list, f, indent=4)
+
+if 'project_log' not in st.session_state or not st.session_state.project_log:
+    st.session_state.project_log = load_history()
+
+def login():
+    st.markdown("## 🔐 SGM Sizing Login")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        if st.button("Log In"):
+            if u in USERS and USERS[u]['password'] == p:
+                st.session_state.authenticated = True
+                st.session_state.user_role = USERS[u]['role']
+                st.session_state.project_log = load_history()
+                st.rerun()
+            else: st.error("Invalid Username or Password")
+
+if not st.session_state.authenticated:
+    login()
+    st.stop()
+
 # ==========================================
-# 5. APP UI (SIDEBAR)
+# 6. APP UI (SIDEBAR)
 # ==========================================
 with st.sidebar:
     st.write(f"👤 **{st.session_state.user_role.upper()} MODE**")
-    if st.button("Log Out"): 
-        st.session_state.authenticated = False
-        st.rerun()
+    if st.button("Log Out"): st.session_state.authenticated = False; st.rerun()
     st.markdown("---")
 
 st.sidebar.markdown("## ⚙️ Sizing Inputs")
@@ -222,9 +212,13 @@ st.sidebar.markdown("---")
 # 2. Fluid
 st.sidebar.header("2. Fluid Selection")
 service_type = st.sidebar.selectbox("Service Type", ["Gas/Vapor", "Liquid", "Steam", "Two-Phase"])
+
+# UPDATED LIST WITH HYDROGEN
+gas_list = ["Custom", "Air", "Nitrogen", "Hydrogen", "Oxygen", "Argon", "Natural Gas", "CO2", "Ammonia", "Chlorine", "LPG", "Propane", "Ethane"]
+liq_list = ["Custom", "Water", "Oil (Generic)", "LDO"]
 fluids = ["Custom"]
-if service_type == "Gas/Vapor": fluids = ["Custom", "Air", "Nitrogen", "Oxygen", "Argon", "Natural Gas", "CO2", "Ammonia", "Chlorine", "LPG", "Propane", "Ethane"]
-elif service_type == "Liquid": fluids = ["Custom", "Water", "Oil (Generic)", "LDO"]
+if service_type == "Gas/Vapor": fluids = gas_list
+elif service_type == "Liquid": fluids = liq_list
 selected_fluid = st.sidebar.selectbox("Select Fluid", fluids)
 
 st.sidebar.markdown("---")
@@ -330,7 +324,7 @@ lever_type = st.sidebar.selectbox("Lever", ["None", "Packed", "Open"])
 bellows_req = st.sidebar.checkbox("Bellows?", False)
 
 # ==========================================
-# 6. EXECUTION & DISPLAY
+# 7. EXECUTION & DISPLAY
 # ==========================================
 st.title("🛡️ SGM Valves - Sizing Pro")
 st.markdown("### 📊 Sizing Dashboard")
@@ -424,36 +418,27 @@ if st.button("🚀 Calculate & Generate Datasheet"):
     pdf_b = generate_single_pdf(full_data)
     
     st.session_state.last_results = {"cap": disp_cap, "unit": unit_W, "orf": sel_orf, "spr": spring_txt}
-    # Log Entry now includes 'Offer' for filtering
     st.session_state.project_log.append({"Tag": tag_no, "Offer": offer_no, "Orifice": sel_orf, "PDF": pdf_b, "data": full_data})
-    
-    # Auto-save to persistence file
     save_history_to_file()
 
-# --- RESULTS & HISTORY ---
 if st.session_state.last_results:
     r = st.session_state.last_results
     st.success(f"Rated Capacity: {r['cap']:.2f} {r['unit']}")
     st.metric("Orifice / Spring", f"{r['orf']} / {r['spr']}")
     if st.session_state.user_role == 'admin':
         st.download_button("📥 Datasheet", st.session_state.project_log[-1]['PDF'], f"{tag_no}.pdf", "application/pdf")
-    else:
-        st.warning("Download Restricted")
+    else: st.warning("Download Restricted")
 
 st.markdown("---")
 st.markdown("### 🗃️ Project History")
-
-# Filter Log by Current Offer No
 current_offer_filter = offer_no.strip()
 filtered_history = [item for item in st.session_state.project_log if item.get('Offer') == current_offer_filter]
 
 if filtered_history:
     disp_log = [{k: v for k, v in item.items() if k not in ['PDF', 'data']} for item in filtered_history]
     st.table(pd.DataFrame(disp_log))
-    
     if st.session_state.user_role == 'admin':
         if st.button("📦 Download Project Report (Single PDF)"):
             combined_pdf_bytes = generate_combined_pdf(filtered_history)
             st.download_button("⬇️ Click to Download Combined Report", combined_pdf_bytes, f"Project_{current_offer_filter}.pdf", "application/pdf")
-else:
-    st.info(f"No sizing history found for Offer No: {current_offer_filter}")
+else: st.info(f"No sizing history found for Offer No: {current_offer_filter}")
