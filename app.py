@@ -56,7 +56,16 @@ FLANGE_LIMITS = {
     "900#": 153.2, "1500#": 255.3, "2500#": 425.5
 }
 
-API_526_SIZES = {'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'), 'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'), 'K': ('3"', '4"'), 'L': ('3"', '4"'), 'M': ('4"', '6"'), 'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'), 'R': ('6"', '8"'), 'T': ('8"', '10"')}
+# Added strict sizing matrix for API 526 combinations
+API_526_DIM = {
+    'D': [('1"', '2"')], 'E': [('1"', '2"')], 'F': [('1.5"', '2"')],
+    'G': [('1.5"', '2.5"'), ('2"', '3"')], 'H': [('1.5"', '3"'), ('2"', '3"')],
+    'J': [('2"', '3"')], 'K': [('3"', '4"')], 'L': [('3"', '4"'), ('4"', '6"')],
+    'M': [('4"', '6"')], 'N': [('4"', '6"')], 'P': [('4"', '6"')],
+    'Q': [('6"', '8"')], 'R': [('6"', '8"')], 'T': [('8"', '10"')]
+}
+
+API_526_SIZES = list(API_526_DIM.keys())
 
 # --- 4. HELPERS & PDF FUNCTIONS ---
 def clean_text(text):
@@ -265,30 +274,55 @@ with st.sidebar.expander("4. Coefficients"):
     Kd = st.number_input("Kd", value=0.975 if service_type!="Liquid" else 0.65, min_value=0.01)
     Kb = st.number_input("Kb", value=1.0, min_value=0.01); Kc = st.number_input("Kc", value=1.0, min_value=0.01)
 
-# --- 5. MECHANICAL MOC UPDATES APPLIED HERE ---
+# --- 5. MECHANICAL ---
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical")
+
+lever_type = st.sidebar.selectbox("Lever", ["None", "Packed", "Open"])
+bellows_req = st.sidebar.checkbox("Bellows Required?", False)
+
 c_m1, c_m2 = st.sidebar.columns(2)
 body_mat = c_m1.selectbox("Body", ["A216 Gr WCB", "SS316"])
-# Added Nozzle options
 nozzle_mat = c_m2.selectbox("Nozzle", ["SS316", "SS316L", "CF8M/CF3M", "Hast C", "Monel"])
 
 c_m3, c_m4 = st.sidebar.columns(2)
-disc_mat = c_m3.selectbox("Disc", ["SS316", "SS304"])
-# Added Spring options
+# Updated Disc Material List per User Request
+disc_mat = c_m3.selectbox("Disc", ["SS304", "SS316", "A351 Gr CF3", "A351 Gr CF3M", "A351 Gr CF8M", "Hastelloy C", "Monel"])
 spring_mat = c_m4.selectbox("Spring", ["Spring Steel", "SS316", "High temp Alloy Steel", "Inconel"])
 
 st.sidebar.subheader("End Connections")
 P_set_bar = raw_P1 / 14.5 if unit_P1 == "psig" else (raw_P1 * 0.98 if unit_P1 == "kg/cm2g" else raw_P1)
+
+# Back Pressure Checking & Warning
+bp_percent = (total_bp / P_set_bar) * 100 if P_set_bar > 0 else 0
+if not bellows_req and bp_percent > 10:
+    st.sidebar.warning(f"⚠️ Back Pressure ({bp_percent:.1f}%) > 10%. Consider adding a Bellows.")
+elif bellows_req and bp_percent > 50:
+    st.sidebar.warning(f"⚠️ Back Pressure ({bp_percent:.1f}%) > standard 50% limit for Bellows.")
+
 conn_str = ""; manual_dim_in = 0; manual_dim_out = 0
 
 if valve_standard == "API 526 (Flanged)":
+    # API 526 Target Orifice drives the available size combinations
+    target_orf = designated_orf if calc_mode.startswith("Capacity") else st.sidebar.selectbox("Target Orifice (For Size Selection)", API_526_SIZES)
+    
     c_conn1, c_conn2 = st.sidebar.columns(2)
     inlet_rating = c_conn1.selectbox("Inlet Rating", ["150#", "300#", "600#", "900#", "1500#", "2500#"], index=1)
+    
+    # Rating limit check warning
     limit = FLANGE_LIMITS.get(inlet_rating, 20)
-    if P_set_bar > limit: st.sidebar.error(f"🚨 Set P ({P_set_bar:.1f} bar) exceeds {inlet_rating} limit!")
+    if P_set_bar > limit: 
+        st.sidebar.error(f"🚨 Set P ({P_set_bar:.1f} bar) exceeds max rating ({limit} bar) for {inlet_rating}!")
+
     outlet_rating = c_conn2.selectbox("Outlet Rating", ["150#", "300#"], index=0)
-    conn_str = f"{inlet_rating} x {outlet_rating} RF"
+    
+    # Filter API 526 sizes
+    api_opts = API_526_DIM.get(target_orf, [('Custom', 'Custom')])
+    size_opts = [f'{i} x {o}' for i, o in api_opts]
+    selected_size = st.sidebar.selectbox("API 526 Size (Inlet x Outlet)", size_opts)
+
+    conn_str = f"{selected_size} - {inlet_rating} x {outlet_rating} RF"
+    
 else: 
     conn_style = st.sidebar.radio("Connection Style", ["Threaded / Socket Weld", "Flanged"], horizontal=True)
     target_orf = designated_orf if calc_mode.startswith("Capacity") else st.sidebar.selectbox("Select Target Orifice (For Conn Check)", ["B","D","E","F","G"])
@@ -317,6 +351,11 @@ else:
         if target_orf == "G" and P_set_bar < 20: avail_in_ratings = [r for r in avail_in_ratings if r in ["150#", "300#"]]
         c_r1, c_r2 = st.sidebar.columns(2)
         in_rate = c_r1.selectbox("Inlet Flange", avail_in_ratings)
+        
+        limit = FLANGE_LIMITS.get(in_rate, 20)
+        if P_set_bar > limit: 
+            st.sidebar.error(f"🚨 Set P ({P_set_bar:.1f} bar) exceeds {in_rate} max rating ({limit} bar)!")
+
         out_rate = c_r2.selectbox("Outlet Flange", ["150#", "300#", "600#"])
         conn_str = f"{in_sz} {in_rate} x {out_sz} {out_rate} RF"
     
@@ -324,8 +363,6 @@ else:
     c_d1, c_d2 = st.sidebar.columns(2)
     manual_dim_in = c_d1.number_input("Inlet C-to-F", 0); manual_dim_out = c_d2.number_input("Outlet C-to-F", 0)
 
-lever_type = st.sidebar.selectbox("Lever", ["None", "Packed", "Open"])
-bellows_req = st.sidebar.checkbox("Bellows?", False)
 
 # ==========================================
 # 7. EXECUTION & DISPLAY
@@ -372,6 +409,10 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         sel_orf = designated_orf; sel_area = ORIFICE_DATA[sel_orf]['area']; form_str = "Rated Capacity"
         if P_set_bar > ORIFICE_DATA[sel_orf]['max_p']: st.warning("Pressure Exceeded!")
 
+    # Check if calculation changed the guessed API Target Orifice
+    if calc_mode.startswith("Sizing") and valve_standard == "API 526 (Flanged)" and sel_orf != target_orf:
+        st.warning(f"⚠️ **Note:** You pre-selected connections for an '{target_orf}' Orifice, but the required calculated Orifice is '{sel_orf}'. You may need to recalculate with the correct connections.")
+
     # Reverse Calc
     if service_type == "Gas/Vapor":
         C = 520 * math.sqrt(u_k * ((2/(u_k+1))**((u_k+1)/(u_k-1)))) 
@@ -413,10 +454,8 @@ if st.button("🚀 Calculate & Generate Datasheet"):
     req_str = f"{raw_W} {unit_W}" if calc_mode.startswith("Sizing") else "N/A"
     proj = {"Customer": customer, "Tag": tag_no, "Offer": offer_no, "Enquiry": enquiry_no, "Model No": model_no}
     proc = {"Service": service_type, "Fluid": selected_fluid, "Set P": f"{raw_P1} {unit_P1}", "Flow": req_str, "Overpressure": overpressure_opt}
-    # Update to push the newly selected materials into the PDF data pack
-    mech = {"Standard": valve_standard, "Size": conn_str, "Body": body_mat, "Trim": nozzle_mat, "Orifice": sel_orf}
+    mech = {"Standard": valve_standard, "Size": conn_str, "Body": body_mat, "Trim": nozzle_mat, "Disc": disc_mat, "Orifice": sel_orf}
     res = {"Req Area": f"{req_area:.2f} mm2", "Sel Area": f"{sel_area} mm2", "RATED CAP": f"{disp_cap:.2f} {unit_W}", "Formula": form_str}
-    # Included spring material string formatting here to match the form selection
     safe = {"Spring Mat": spring_mat, "Spring No": spring_txt, "Spring Load": f"{force_spr:.1f} N", "React Force": f"{force_react:.1f} N", "Noise": noise}
     fluid_d = {"MW": u_Mw, "k": u_k, "SG": f"{u_rho/1000:.3f}", "Kd": Kd}
     
