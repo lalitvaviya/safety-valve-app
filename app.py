@@ -22,11 +22,10 @@ if 'user_role' not in st.session_state: st.session_state.user_role = None
 if 'last_results' not in st.session_state: st.session_state.last_results = None
 
 # --- 3. DATABASES & CONSTANTS ---
-# Added Hydrogen here
 FLUID_DB = {
     "Air": {"mw": 28.96, "k": 1.40}, 
     "Nitrogen": {"mw": 28.01, "k": 1.40},
-    "Hydrogen": {"mw": 2.02, "k": 1.41},  # <--- NEW
+    "Hydrogen": {"mw": 2.02, "k": 1.41},
     "Oxygen": {"mw": 32.00, "k": 1.40}, 
     "Argon": {"mw": 39.95, "k": 1.67},
     "Natural Gas": {"mw": 19.00, "k": 1.27}, 
@@ -60,7 +59,6 @@ FLANGE_LIMITS = {
 API_526_SIZES = {'D': ('1"', '2"'), 'E': ('1"', '2"'), 'F': ('1.5"', '2"'), 'G': ('1.5"', '2.5"'), 'H': ('1.5"', '3"'), 'J': ('2"', '3"'), 'K': ('3"', '4"'), 'L': ('3"', '4"'), 'M': ('4"', '6"'), 'N': ('4"', '6"'), 'P': ('4"', '6"'), 'Q': ('6"', '8"'), 'R': ('6"', '8"'), 'T': ('8"', '10"')}
 
 # --- 4. HELPERS & PDF FUNCTIONS ---
-
 def clean_text(text):
     if not isinstance(text, str): return str(text)
     replacements = {"°": "deg", "²": "2", "³": "3", "±": "+/-", "≥": ">=", "≤": "<="}
@@ -213,7 +211,6 @@ st.sidebar.markdown("---")
 st.sidebar.header("2. Fluid Selection")
 service_type = st.sidebar.selectbox("Service Type", ["Gas/Vapor", "Liquid", "Steam", "Two-Phase"])
 
-# UPDATED LIST WITH HYDROGEN
 gas_list = ["Custom", "Air", "Nitrogen", "Hydrogen", "Oxygen", "Argon", "Natural Gas", "CO2", "Ammonia", "Chlorine", "LPG", "Propane", "Ethane"]
 liq_list = ["Custom", "Water", "Oil (Generic)", "LDO"]
 fluids = ["Custom"]
@@ -250,7 +247,7 @@ raw_T1 = st.sidebar.number_input("Temperature", value=45.0)
 unit_T1 = st.sidebar.selectbox("Unit", ["°C", "°F"], key="u_t1")
 vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", 0.02) if service_type == "Liquid" else 0.0
 
-# Properties
+# --- PROPERTIES FIX APPLIED HERE ---
 st.sidebar.markdown("---")
 u_Mw = 28.96; u_k = 1.4; u_rho = 997.0; u_visc = 1.0; u_Z = 0.95
 if selected_fluid in FLUID_DB:
@@ -258,13 +255,17 @@ if selected_fluid in FLUID_DB:
     u_Mw = p.get("mw", 28.96); u_k = p.get("k", 1.4); u_rho = p.get("rho", 997.0); u_visc = p.get("visc", 1.0)
 
 if service_type == "Gas/Vapor":
-    u_Mw = st.sidebar.number_input("MW", u_Mw); u_k = st.sidebar.number_input("k", u_k); u_Z = st.sidebar.number_input("Z", u_Z)
+    # Added min_value=0.01 to explicitly allow Custom values lower than default bounds
+    u_Mw = st.sidebar.number_input("MW", value=float(u_Mw), min_value=0.01, format="%.2f")
+    u_k = st.sidebar.number_input("k", value=float(u_k), min_value=0.01, format="%.2f")
+    u_Z = st.sidebar.number_input("Z", value=float(u_Z), min_value=0.01, format="%.2f")
 elif service_type == "Liquid":
-    u_rho = st.sidebar.number_input("Density", u_rho); u_visc = st.sidebar.number_input("Visc", u_visc)
+    u_rho = st.sidebar.number_input("Density", value=float(u_rho), min_value=0.01, format="%.2f")
+    u_visc = st.sidebar.number_input("Visc", value=float(u_visc), min_value=0.01, format="%.2f")
 
 with st.sidebar.expander("4. Coefficients"):
-    Kd = st.number_input("Kd", 0.975 if service_type!="Liquid" else 0.65)
-    Kb = st.number_input("Kb", 1.0); Kc = st.number_input("Kc", 1.0)
+    Kd = st.number_input("Kd", value=0.975 if service_type!="Liquid" else 0.65, min_value=0.01)
+    Kb = st.number_input("Kb", value=1.0, min_value=0.01); Kc = st.number_input("Kc", value=1.0, min_value=0.01)
 
 # 5. Mechanical
 st.sidebar.markdown("---")
@@ -435,10 +436,30 @@ current_offer_filter = offer_no.strip()
 filtered_history = [item for item in st.session_state.project_log if item.get('Offer') == current_offer_filter]
 
 if filtered_history:
+    # 1. Prepare data for display and CSV export
     disp_log = [{k: v for k, v in item.items() if k not in ['PDF', 'data']} for item in filtered_history]
-    st.table(pd.DataFrame(disp_log))
-    if st.session_state.user_role == 'admin':
-        if st.button("📦 Download Project Report (Single PDF)"):
-            combined_pdf_bytes = generate_combined_pdf(filtered_history)
-            st.download_button("⬇️ Click to Download Combined Report", combined_pdf_bytes, f"Project_{current_offer_filter}.pdf", "application/pdf")
-else: st.info(f"No sizing history found for Offer No: {current_offer_filter}")
+    df_log = pd.DataFrame(disp_log)
+    
+    # 2. Display the table
+    st.table(df_log)
+    
+    # 3. Create buttons for PDF and CSV downloads side-by-side
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.session_state.user_role == 'admin':
+            if st.button("📦 Download Project Report (Single PDF)"):
+                combined_pdf_bytes = generate_combined_pdf(filtered_history)
+                st.download_button("⬇️ Click to Download Combined Report", combined_pdf_bytes, f"Project_{current_offer_filter}.pdf", "application/pdf")
+    
+    with col2:
+        # Generate CSV from the DataFrame
+        csv_data = df_log.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📊 Download History as CSV",
+            data=csv_data,
+            file_name=f"Sizing_History_{current_offer_filter}.csv",
+            mime="text/csv"
+        )
+else: 
+    st.info(f"No sizing history found for Offer No: {current_offer_filter}")
