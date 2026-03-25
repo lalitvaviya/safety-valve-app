@@ -247,7 +247,6 @@ raw_T1 = st.sidebar.number_input("Temperature", value=45.0)
 unit_T1 = st.sidebar.selectbox("Unit", ["°C", "°F"], key="u_t1")
 vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", 0.02) if service_type == "Liquid" else 0.0
 
-# --- PROPERTIES FIX APPLIED HERE ---
 st.sidebar.markdown("---")
 u_Mw = 28.96; u_k = 1.4; u_rho = 997.0; u_visc = 1.0; u_Z = 0.95
 if selected_fluid in FLUID_DB:
@@ -255,7 +254,6 @@ if selected_fluid in FLUID_DB:
     u_Mw = p.get("mw", 28.96); u_k = p.get("k", 1.4); u_rho = p.get("rho", 997.0); u_visc = p.get("visc", 1.0)
 
 if service_type == "Gas/Vapor":
-    # Added min_value=0.01 to explicitly allow Custom values lower than default bounds
     u_Mw = st.sidebar.number_input("MW", value=float(u_Mw), min_value=0.01, format="%.2f")
     u_k = st.sidebar.number_input("k", value=float(u_k), min_value=0.01, format="%.2f")
     u_Z = st.sidebar.number_input("Z", value=float(u_Z), min_value=0.01, format="%.2f")
@@ -267,13 +265,18 @@ with st.sidebar.expander("4. Coefficients"):
     Kd = st.number_input("Kd", value=0.975 if service_type!="Liquid" else 0.65, min_value=0.01)
     Kb = st.number_input("Kb", value=1.0, min_value=0.01); Kc = st.number_input("Kc", value=1.0, min_value=0.01)
 
-# 5. Mechanical
+# --- 5. MECHANICAL MOC UPDATES APPLIED HERE ---
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical")
 c_m1, c_m2 = st.sidebar.columns(2)
-body_mat = c_m1.selectbox("Body", ["A216 Gr WCB", "SS316"]); nozzle_mat = c_m2.selectbox("Nozzle", ["SS316", "Monel"])
+body_mat = c_m1.selectbox("Body", ["A216 Gr WCB", "SS316"])
+# Added Nozzle options
+nozzle_mat = c_m2.selectbox("Nozzle", ["SS316", "SS316L", "CF8M/CF3M", "Hast C", "Monel"])
+
 c_m3, c_m4 = st.sidebar.columns(2)
-disc_mat = c_m3.selectbox("Disc", ["SS316", "SS304"]); spring_mat = c_m4.selectbox("Spring", ["Spring Steel", "SS316"])
+disc_mat = c_m3.selectbox("Disc", ["SS316", "SS304"])
+# Added Spring options
+spring_mat = c_m4.selectbox("Spring", ["Spring Steel", "SS316", "High temp Alloy Steel", "Inconel"])
 
 st.sidebar.subheader("End Connections")
 P_set_bar = raw_P1 / 14.5 if unit_P1 == "psig" else (raw_P1 * 0.98 if unit_P1 == "kg/cm2g" else raw_P1)
@@ -410,9 +413,11 @@ if st.button("🚀 Calculate & Generate Datasheet"):
     req_str = f"{raw_W} {unit_W}" if calc_mode.startswith("Sizing") else "N/A"
     proj = {"Customer": customer, "Tag": tag_no, "Offer": offer_no, "Enquiry": enquiry_no, "Model No": model_no}
     proc = {"Service": service_type, "Fluid": selected_fluid, "Set P": f"{raw_P1} {unit_P1}", "Flow": req_str, "Overpressure": overpressure_opt}
+    # Update to push the newly selected materials into the PDF data pack
     mech = {"Standard": valve_standard, "Size": conn_str, "Body": body_mat, "Trim": nozzle_mat, "Orifice": sel_orf}
     res = {"Req Area": f"{req_area:.2f} mm2", "Sel Area": f"{sel_area} mm2", "RATED CAP": f"{disp_cap:.2f} {unit_W}", "Formula": form_str}
-    safe = {"Spring": spring_txt, "Spring Load": f"{force_spr:.1f} N", "React Force": f"{force_react:.1f} N", "Noise": noise}
+    # Included spring material string formatting here to match the form selection
+    safe = {"Spring Mat": spring_mat, "Spring No": spring_txt, "Spring Load": f"{force_spr:.1f} N", "React Force": f"{force_react:.1f} N", "Noise": noise}
     fluid_d = {"MW": u_Mw, "k": u_k, "SG": f"{u_rho/1000:.3f}", "Kd": Kd}
     
     full_data = {'proj': proj, 'proc': proc, 'fluid': fluid_d, 'mech': mech, 'res': res, 'safety': safe}
@@ -436,14 +441,10 @@ current_offer_filter = offer_no.strip()
 filtered_history = [item for item in st.session_state.project_log if item.get('Offer') == current_offer_filter]
 
 if filtered_history:
-    # 1. Prepare data for display and CSV export
     disp_log = [{k: v for k, v in item.items() if k not in ['PDF', 'data']} for item in filtered_history]
     df_log = pd.DataFrame(disp_log)
-    
-    # 2. Display the table
     st.table(df_log)
     
-    # 3. Create buttons for PDF and CSV downloads side-by-side
     col1, col2 = st.columns(2)
     
     with col1:
@@ -453,7 +454,6 @@ if filtered_history:
                 st.download_button("⬇️ Click to Download Combined Report", combined_pdf_bytes, f"Project_{current_offer_filter}.pdf", "application/pdf")
     
     with col2:
-        # Generate CSV from the DataFrame
         csv_data = df_log.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📊 Download History as CSV",
