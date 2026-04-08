@@ -278,7 +278,9 @@ raw_BP_var = st.sidebar.number_input("Variable Back Pressure", value=0.0)
 total_bp = raw_BP_const + raw_BP_var
 raw_T1 = st.sidebar.number_input("Temperature", value=45.0)
 unit_T1 = st.sidebar.selectbox("Unit", ["°C", "°F"], key="u_t1")
-vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", 0.02) if service_type == "Liquid" else 0.0
+
+# Removed mandatory limit above 0.02, defaulting to 0.0 allowing custom user entry.
+vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", value=0.0, format="%.4f") if service_type == "Liquid" else 0.0
 
 st.sidebar.markdown("---")
 u_Mw = 28.96; u_k = 1.4; u_rho = 997.0; u_visc = 1.0; u_Z = 0.95
