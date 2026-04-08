@@ -258,7 +258,6 @@ if calc_mode.startswith("Sizing"):
 else:
     st.sidebar.info("Select Orifice for Capacity")
     
-    # Orifice list based on standard selection (C is removed for Non-API)
     if valve_standard.startswith("Non"):
         orf_list = [k for k in ORIFICE_DATA.keys() if k != 'C']
     else:
@@ -278,29 +277,31 @@ raw_BP_var = st.sidebar.number_input("Variable Back Pressure", value=0.0)
 total_bp = raw_BP_const + raw_BP_var
 raw_T1 = st.sidebar.number_input("Temperature", value=45.0)
 unit_T1 = st.sidebar.selectbox("Unit", ["°C", "°F"], key="u_t1")
-
-# Removed mandatory limit above 0.02, defaulting to 0.0 allowing custom user entry.
 vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", value=0.0, format="%.4f") if service_type == "Liquid" else 0.0
 
+# --- PROPERTIES FIX APPLIED HERE ---
 st.sidebar.markdown("---")
-u_Mw = 28.96; u_k = 1.4; u_rho = 997.0; u_visc = 1.0; u_Z = 0.95
+u_Z = 0.95
 if selected_fluid in FLUID_DB:
     p = FLUID_DB[selected_fluid]
     u_Mw = p.get("mw", 28.96); u_k = p.get("k", 1.4); u_rho = p.get("rho", 997.0); u_visc = p.get("visc", 1.0)
+else:
+    # If Custom is selected, set values to None to leave the input boxes blank
+    u_Mw = None; u_k = None; u_rho = None; u_visc = None
 
 if service_type == "Gas/Vapor":
-    u_Mw = st.sidebar.number_input("MW", value=float(u_Mw), min_value=0.01, format="%.2f")
-    u_k = st.sidebar.number_input("k", value=float(u_k), min_value=0.01, format="%.2f")
-    u_Z = st.sidebar.number_input("Z", value=float(u_Z), min_value=0.01, format="%.2f")
+    u_Mw = st.sidebar.number_input("MW", value=u_Mw, min_value=0.01 if u_Mw else None, format="%.2f", placeholder="Enter Custom MW")
+    u_k = st.sidebar.number_input("k (Specific Heat Ratio)", value=u_k, min_value=0.01 if u_k else None, format="%.2f", placeholder="Enter Custom k")
+    u_Z = st.sidebar.number_input("Z (Compressibility)", value=float(u_Z), min_value=0.01, format="%.2f")
 elif service_type == "Liquid":
-    u_rho = st.sidebar.number_input("Density", value=float(u_rho), min_value=0.01, format="%.2f")
-    u_visc = st.sidebar.number_input("Visc", value=float(u_visc), min_value=0.01, format="%.2f")
+    u_rho = st.sidebar.number_input("Density", value=u_rho, min_value=0.01 if u_rho else None, format="%.2f", placeholder="Enter Custom Density")
+    u_visc = st.sidebar.number_input("Viscosity", value=u_visc, min_value=0.01 if u_visc else None, format="%.2f", placeholder="Enter Custom Viscosity")
 
 with st.sidebar.expander("4. Coefficients"):
     Kd = st.number_input("Kd", value=0.975 if service_type!="Liquid" else 0.65, min_value=0.01)
     Kb = st.number_input("Kb", value=1.0, min_value=0.01); Kc = st.number_input("Kc", value=1.0, min_value=0.01)
 
-# --- 5. MECHANICAL MOC UPDATES WITH DYNAMIC OVERRIDE ---
+# --- 5. MECHANICAL ---
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical")
 
@@ -324,7 +325,6 @@ spring_mat = custom_select(c_m4, "Spring", spring_opts, "spring")
 st.sidebar.subheader("End Connections")
 P_set_bar = raw_P1 / 14.5 if unit_P1 == "psig" else (raw_P1 * 0.98 if unit_P1 == "kg/cm2g" else raw_P1)
 
-# Back Pressure Checking & Warning
 bp_percent = (total_bp / P_set_bar) * 100 if P_set_bar > 0 else 0
 if not bellows_req and bp_percent > 10:
     st.sidebar.warning(f"⚠️ Back Pressure ({bp_percent:.1f}%) > 10%. Consider adding a Bellows.")
@@ -404,6 +404,15 @@ st.title("🛡️ SGM Valves - Sizing Pro")
 st.markdown("### 📊 Sizing Dashboard")
 
 if st.button("🚀 Calculate & Generate Datasheet"):
+    
+    # SAFETY CHECK: Block execution if custom fields are left blank
+    if service_type == "Gas/Vapor" and (u_Mw is None or u_k is None):
+        st.error("🚨 Please enter the Molecular Weight (MW) and Specific Heat Ratio (k) for your Custom Fluid.")
+        st.stop()
+    elif service_type == "Liquid" and (u_rho is None or u_visc is None):
+        st.error("🚨 Please enter the Density and Viscosity for your Custom Fluid.")
+        st.stop()
+        
     T_K = raw_T1 + 273.15 if unit_T1 == "°C" else (raw_T1 - 32)*5/9 + 273.15
     P1_abs = (P_set_bar * op_mult) + 1.013
     
@@ -432,7 +441,6 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             req_area = (Q_gpm * math.sqrt(u_rho/1000)) / (38 * Kd * math.sqrt(dP*14.5)) * 645.16
             form_str = "A = Q / (Kd * sqrt(dP))"
             
-        # Updated chk_orf to completely remove 'C' for Non-API
         chk_orf = {k:v for k,v in ORIFICE_DATA.items() if k != 'C'} if valve_standard.startswith("Non") else {k:v for k,v in ORIFICE_DATA.items() if k in API_526_SIZES}
         for l, d in chk_orf.items():
             if d['area'] >= req_area and P_set_bar <= d['max_p']:
@@ -486,7 +494,6 @@ if st.button("🚀 Calculate & Generate Datasheet"):
 
     req_str = f"{raw_W} {unit_W}" if calc_mode.startswith("Sizing") else "N/A"
     proj = {"Customer": customer, "Tag": tag_no, "Offer": offer_no, "Enquiry": enquiry_no, "Model No": model_no}
-    # Used display_fluid here so the custom written name prints to the PDF
     proc = {"Service": service_type, "Fluid": display_fluid, "Set P": f"{raw_P1} {unit_P1}", "Flow": req_str, "Overpressure": overpressure_opt}
     mech = {"Standard": valve_standard, "Size": conn_str, "Body": body_mat, "Trim": nozzle_mat, "Disc": disc_mat, "Orifice": sel_orf}
     res = {"Req Area": f"{req_area:.2f} mm2", "Sel Area": f"{sel_area} mm2", "RATED CAP": f"{disp_cap:.2f} {unit_W}", "Formula": form_str}
@@ -517,11 +524,9 @@ current_offer_filter = offer_no.strip()
 filtered_history = [item for item in st.session_state.project_log if item.get('Offer') == current_offer_filter]
 
 if filtered_history:
-    # Prepare Display Data
     disp_log = [{k: v for k, v in item.items() if k not in ['PDF', 'data']} for item in filtered_history]
     df_log = pd.DataFrame(disp_log)
     
-    # Insert an ID column to make deletion selection obvious
     df_log.insert(0, "ID", range(1, len(df_log) + 1))
     st.table(df_log)
     
@@ -543,20 +548,17 @@ if filtered_history:
     st.markdown("#### 🗑️ Remove Record")
     c_del1, c_del2 = st.columns([3, 1])
     
-    # Create descriptive options linking the ID back to the specific log entry
     del_opts = [f"ID {i+1}: {item['Tag']} (Orifice: {item.get('Orifice', '')})" for i, item in enumerate(filtered_history)]
     record_to_del = c_del1.selectbox("Select record to delete:", ["-- Select --"] + del_opts)
     
     if c_del2.button("❌ Delete"):
         if record_to_del != "-- Select --":
-            # Extract the actual index mathematically from the string
             idx = int(record_to_del.split(":")[0].replace("ID ", "")) - 1
             item_to_remove = filtered_history[idx]
             
-            # Remove from overarching session state and save
             st.session_state.project_log.remove(item_to_remove)
             save_history_to_file()
-            st.rerun() # Refresh the interface to reflect changes
+            st.rerun() 
         else:
             st.warning("Please select a valid record to delete.")
 
