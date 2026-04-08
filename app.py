@@ -306,7 +306,6 @@ lever_type = custom_select(st.sidebar, "Lever", ["None", "Packed", "Open"], "lev
 bellows_req = st.sidebar.checkbox("Bellows Required?", False)
 
 c_m1, c_m2 = st.sidebar.columns(2)
-# Added SS304 and CF8 to body_opts
 body_opts = ["A216 Gr WCB", "SS316", "SS304", "CF8", "A351 Gr. CF3", "A351 Gr. CF3M", "A351 Gr. CF8M"]
 body_mat = custom_select(c_m1, "Body", body_opts, "body")
 
@@ -507,24 +506,29 @@ if st.session_state.last_results:
         st.download_button("📥 Datasheet", st.session_state.project_log[-1]['PDF'], f"{tag_no}.pdf", "application/pdf")
     else: st.warning("Download Restricted")
 
+# ==========================================
+# 8. PROJECT HISTORY & DELETION
+# ==========================================
 st.markdown("---")
 st.markdown("### 🗃️ Project History")
 current_offer_filter = offer_no.strip()
 filtered_history = [item for item in st.session_state.project_log if item.get('Offer') == current_offer_filter]
 
 if filtered_history:
+    # Prepare Display Data
     disp_log = [{k: v for k, v in item.items() if k not in ['PDF', 'data']} for item in filtered_history]
     df_log = pd.DataFrame(disp_log)
+    
+    # Insert an ID column to make deletion selection obvious
+    df_log.insert(0, "ID", range(1, len(df_log) + 1))
     st.table(df_log)
     
     col1, col2 = st.columns(2)
-    
     with col1:
         if st.session_state.user_role == 'admin':
             if st.button("📦 Download Project Report (Single PDF)"):
                 combined_pdf_bytes = generate_combined_pdf(filtered_history)
                 st.download_button("⬇️ Click to Download Combined Report", combined_pdf_bytes, f"Project_{current_offer_filter}.pdf", "application/pdf")
-    
     with col2:
         csv_data = df_log.to_csv(index=False).encode('utf-8')
         st.download_button(
@@ -533,5 +537,26 @@ if filtered_history:
             file_name=f"Sizing_History_{current_offer_filter}.csv",
             mime="text/csv"
         )
+        
+    st.markdown("#### 🗑️ Remove Record")
+    c_del1, c_del2 = st.columns([3, 1])
+    
+    # Create descriptive options linking the ID back to the specific log entry
+    del_opts = [f"ID {i+1}: {item['Tag']} (Orifice: {item.get('Orifice', '')})" for i, item in enumerate(filtered_history)]
+    record_to_del = c_del1.selectbox("Select record to delete:", ["-- Select --"] + del_opts)
+    
+    if c_del2.button("❌ Delete"):
+        if record_to_del != "-- Select --":
+            # Extract the actual index mathematically from the string
+            idx = int(record_to_del.split(":")[0].replace("ID ", "")) - 1
+            item_to_remove = filtered_history[idx]
+            
+            # Remove from overarching session state and save
+            st.session_state.project_log.remove(item_to_remove)
+            save_history_to_file()
+            st.rerun() # Refresh the interface to reflect changes
+        else:
+            st.warning("Please select a valid record to delete.")
+
 else: 
     st.info(f"No sizing history found for Offer No: {current_offer_filter}")
