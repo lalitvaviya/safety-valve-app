@@ -257,7 +257,14 @@ if calc_mode.startswith("Sizing"):
     unit_W = st.sidebar.selectbox("Flow Unit", unit_options, key="u_flow")
 else:
     st.sidebar.info("Select Orifice for Capacity")
-    designated_orf = st.sidebar.selectbox("Select Orifice", list(ORIFICE_DATA.keys()))
+    
+    # Orifice list based on standard selection (C is removed for Non-API)
+    if valve_standard.startswith("Non"):
+        orf_list = [k for k in ORIFICE_DATA.keys() if k != 'C']
+    else:
+        orf_list = API_526_SIZES
+        
+    designated_orf = st.sidebar.selectbox("Select Orifice", orf_list)
     unit_W = st.sidebar.selectbox("Output Unit", unit_options, key="u_flow_cap")
 
 c1, c2 = st.sidebar.columns(2)
@@ -299,8 +306,8 @@ lever_type = custom_select(st.sidebar, "Lever", ["None", "Packed", "Open"], "lev
 bellows_req = st.sidebar.checkbox("Bellows Required?", False)
 
 c_m1, c_m2 = st.sidebar.columns(2)
-# Added new A351 casting grades
-body_opts = ["A216 Gr WCB", "SS316", "A351 Gr. CF3", "A351 Gr. CF3M", "A351 Gr. CF8M"]
+# Added SS304 and CF8 to body_opts
+body_opts = ["A216 Gr WCB", "SS316", "SS304", "CF8", "A351 Gr. CF3", "A351 Gr. CF3M", "A351 Gr. CF8M"]
 body_mat = custom_select(c_m1, "Body", body_opts, "body")
 
 nozzle_opts = ["SS316", "SS316L", "CF8M/CF3M", "Hast C", "Monel"]
@@ -424,7 +431,8 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             req_area = (Q_gpm * math.sqrt(u_rho/1000)) / (38 * Kd * math.sqrt(dP*14.5)) * 645.16
             form_str = "A = Q / (Kd * sqrt(dP))"
             
-        chk_orf = ORIFICE_DATA if valve_standard.startswith("Non") else {k:v for k,v in ORIFICE_DATA.items() if k in API_526_SIZES}
+        # Updated chk_orf to completely remove 'C' for Non-API
+        chk_orf = {k:v for k,v in ORIFICE_DATA.items() if k != 'C'} if valve_standard.startswith("Non") else {k:v for k,v in ORIFICE_DATA.items() if k in API_526_SIZES}
         for l, d in chk_orf.items():
             if d['area'] >= req_area and P_set_bar <= d['max_p']:
                 sel_orf = l; sel_area = d['area']; break
