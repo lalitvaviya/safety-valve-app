@@ -40,15 +40,16 @@ FLUID_DB = {
     "LDO": {"rho": 870.0, "visc": 3.5}
 }
 
+# FIXED: Updated Max Pressures to reflect real API 526 / High Pressure capability
 ORIFICE_DATA = {
-    'B': {'area': 38.7, 'max_p': 420}, 'C': {'area': 57.0, 'max_p': 420},
-    'D': {'area': 71.0, 'max_p': 420}, 'E': {'area': 126.5, 'max_p': 153},
-    'F': {'area': 198.0, 'max_p': 51}, 'G': {'area': 324.5, 'max_p': 19.6},
-    'H': {'area': 506.0, 'max_p': 19.6}, 'J': {'area': 830.0, 'max_p': 19.6},
-    'K': {'area': 1186.0, 'max_p': 19.6}, 'L': {'area': 1841.0, 'max_p': 19.6},
-    'M': {'area': 2323.0, 'max_p': 19.6}, 'N': {'area': 2800.0, 'max_p': 19.6},
-    'P': {'area': 4116.0, 'max_p': 19.6}, 'Q': {'area': 7129.0, 'max_p': 19.6},
-    'R': {'area': 10323.0, 'max_p': 19.6}, 'T': {'area': 16774.0, 'max_p': 19.6}
+    'B': {'area': 38.7, 'max_p': 425}, 'C': {'area': 57.0, 'max_p': 425},
+    'D': {'area': 71.0, 'max_p': 425}, 'E': {'area': 126.5, 'max_p': 425},
+    'F': {'area': 198.0, 'max_p': 425}, 'G': {'area': 324.5, 'max_p': 255},
+    'H': {'area': 506.0, 'max_p': 255}, 'J': {'area': 830.0, 'max_p': 255},
+    'K': {'area': 1186.0, 'max_p': 153}, 'L': {'area': 1841.0, 'max_p': 153},
+    'M': {'area': 2323.0, 'max_p': 153}, 'N': {'area': 2800.0, 'max_p': 102},
+    'P': {'area': 4116.0, 'max_p': 102}, 'Q': {'area': 7129.0, 'max_p': 102},
+    'R': {'area': 10323.0, 'max_p': 51}, 'T': {'area': 16774.0, 'max_p': 51}
 }
 
 FLANGE_LIMITS = {
@@ -73,7 +74,6 @@ def clean_text(text):
     for k, v in replacements.items(): text = text.replace(k, v)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# DYNAMIC CUSTOM OPTION HELPER
 def custom_select(container, label, options, key_prefix):
     opts = list(options)
     if "Custom" not in opts:
@@ -98,7 +98,6 @@ def get_spring_from_file(file_name, orifice, set_pressure):
         df = pd.read_csv(target_path)
         df.columns = [str(c).strip().upper() for c in df.columns]
         
-        # FIXED: Return 'Consult Factory' cleanly if the orifice column is missing
         if orifice not in df.columns: 
             return "Consult Factory", 0, 0
             
@@ -245,7 +244,7 @@ if selected_fluid_dropdown == "Custom":
 else:
     display_fluid = selected_fluid_dropdown
 
-selected_fluid = selected_fluid_dropdown
+selected_fluid = selected_fluid_dropdown 
 
 st.sidebar.markdown("---")
 # 3. Process
@@ -356,7 +355,6 @@ if valve_standard == "API 526 (Flanged)":
 else: 
     conn_style = st.sidebar.radio("Connection Style", ["Threaded / Socket Weld", "Flanged"], horizontal=True)
     
-    # Unified Target Orifice for Non-API
     non_api_orfs = [k for k in ORIFICE_DATA.keys() if k != 'C']
     target_orf = designated_orf if calc_mode.startswith("Capacity") else st.sidebar.selectbox("Select Target Orifice (For Conn Check)", non_api_orfs)
     max_p = ORIFICE_DATA[target_orf]['max_p']
@@ -440,16 +438,21 @@ if st.button("🚀 Calculate & Generate Datasheet"):
         chk_orf = {k:v for k,v in ORIFICE_DATA.items() if k != 'C'} if valve_standard.startswith("Non") else {k:v for k,v in ORIFICE_DATA.items() if k in API_526_SIZES}
         for l, d in chk_orf.items():
             if d['area'] >= req_area and P_set_bar <= d['max_p']:
-                # FIXED: Force the software to select an orifice AT LEAST as big as the Target Orifice you manually selected
                 if d['area'] >= ORIFICE_DATA[target_orf]['area']:
                     sel_orf = l; sel_area = d['area']; break
-        if not sel_orf: st.error("No Orifice Found to fit parameters."); st.stop()
+        
+        # FIXED: More descriptive fallback error
+        if not sel_orf: 
+            st.error(f"🚨 No single Orifice found. Your Required Area ({req_area:.2f} mm²) or Set Pressure ({P_set_bar:.1f} bar) exceeds standard valve limits. Try splitting flow into multiple valves.")
+            st.stop()
         
     else: # Capacity Mode
         sel_orf = designated_orf; sel_area = ORIFICE_DATA[sel_orf]['area']; form_str = "Rated Capacity"
         if P_set_bar > ORIFICE_DATA[sel_orf]['max_p']: st.warning("Pressure Exceeded!")
 
-    # Reverse Calc
+    if calc_mode.startswith("Sizing") and valve_standard == "API 526 (Flanged)" and sel_orf != target_orf:
+        st.warning(f"⚠️ **Note:** You pre-selected connections for an '{target_orf}' Orifice, but the required calculated Orifice is '{sel_orf}'. You may need to recalculate with the correct connections.")
+
     if service_type == "Gas/Vapor":
         C = 520 * math.sqrt(u_k * ((2/(u_k+1))**((u_k+1)/(u_k-1)))) 
         term = math.sqrt((T_K * u_Z) / u_Mw)
@@ -474,7 +477,6 @@ if st.button("🚀 Calculate & Generate Datasheet"):
     fname = "spring_api.csv" if "API" in valve_standard else "spring_non_api.csv"
     res_c, res_min, res_max = get_spring_from_file(fname, sel_orf, P_set_bar)
     
-    # FIXED: Clean fallback formatting for missing Spring Data
     if res_c == "Consult Factory" or str(res_c).startswith("Err"):
         spring_txt = str(res_c)
     else:
