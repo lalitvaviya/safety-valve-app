@@ -97,7 +97,11 @@ def get_spring_from_file(file_name, orifice, set_pressure):
     try:
         df = pd.read_csv(target_path)
         df.columns = [str(c).strip().upper() for c in df.columns]
-        if orifice not in df.columns: return f"Err: Orifice {orifice} not in CSV", 0, 0
+        
+        # FIXED: Return 'Consult Factory' cleanly if the orifice column is missing
+        if orifice not in df.columns: 
+            return "Consult Factory", 0, 0
+            
         for index, row in df.iterrows():
             raw_val = str(row[orifice])
             match = re.search(r"(\d+\.?\d*)\s*[-–to]+\s*(\d+\.?\d*)", raw_val)
@@ -235,14 +239,13 @@ fluids = ["Custom"]
 if service_type == "Gas/Vapor": fluids = gas_list
 elif service_type == "Liquid": fluids = liq_list
 
-# Apply custom fluid rewrite
 selected_fluid_dropdown = st.sidebar.selectbox("Select Fluid", fluids)
 if selected_fluid_dropdown == "Custom":
     display_fluid = st.sidebar.text_input("Specify Custom Fluid Name", "Custom Fluid")
 else:
     display_fluid = selected_fluid_dropdown
 
-selected_fluid = selected_fluid_dropdown # Retain logic variable
+selected_fluid = selected_fluid_dropdown
 
 st.sidebar.markdown("---")
 # 3. Process
@@ -257,13 +260,10 @@ if calc_mode.startswith("Sizing"):
     unit_W = st.sidebar.selectbox("Flow Unit", unit_options, key="u_flow")
 else:
     st.sidebar.info("Select Orifice for Capacity")
-    
-    # Orifice list based on standard selection (C is removed for Non-API)
     if valve_standard.startswith("Non"):
         orf_list = [k for k in ORIFICE_DATA.keys() if k != 'C']
     else:
         orf_list = API_526_SIZES
-        
     designated_orf = st.sidebar.selectbox("Select Orifice", orf_list)
     unit_W = st.sidebar.selectbox("Output Unit", unit_options, key="u_flow_cap")
 
@@ -278,27 +278,32 @@ raw_BP_var = st.sidebar.number_input("Variable Back Pressure", value=0.0)
 total_bp = raw_BP_const + raw_BP_var
 raw_T1 = st.sidebar.number_input("Temperature", value=45.0)
 unit_T1 = st.sidebar.selectbox("Unit", ["°C", "°F"], key="u_t1")
-vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", 0.02) if service_type == "Liquid" else 0.0
+vapor_pressure_barg = st.sidebar.number_input("Vapor Pressure (barg)", value=0.0, format="%.4f") if service_type == "Liquid" else 0.0
 
 st.sidebar.markdown("---")
 u_Mw = 28.96; u_k = 1.4; u_rho = 997.0; u_visc = 1.0; u_Z = 0.95
 if selected_fluid in FLUID_DB:
     p = FLUID_DB[selected_fluid]
     u_Mw = p.get("mw", 28.96); u_k = p.get("k", 1.4); u_rho = p.get("rho", 997.0); u_visc = p.get("visc", 1.0)
+else:
+    if service_type == "Gas/Vapor":
+        u_Mw = None; u_k = None
+    elif service_type == "Liquid":
+        u_rho = None; u_visc = None
 
 if service_type == "Gas/Vapor":
-    u_Mw = st.sidebar.number_input("MW", value=float(u_Mw), min_value=0.01, format="%.2f")
-    u_k = st.sidebar.number_input("k", value=float(u_k), min_value=0.01, format="%.2f")
-    u_Z = st.sidebar.number_input("Z", value=float(u_Z), min_value=0.01, format="%.2f")
+    u_Mw = st.sidebar.number_input("MW", value=u_Mw, min_value=0.01 if u_Mw else None, format="%.2f", placeholder="Enter Custom MW")
+    u_k = st.sidebar.number_input("k (Specific Heat Ratio)", value=u_k, min_value=0.01 if u_k else None, format="%.2f", placeholder="Enter Custom k")
+    u_Z = st.sidebar.number_input("Z (Compressibility)", value=float(u_Z), min_value=0.01, format="%.2f")
 elif service_type == "Liquid":
-    u_rho = st.sidebar.number_input("Density", value=float(u_rho), min_value=0.01, format="%.2f")
-    u_visc = st.sidebar.number_input("Visc", value=float(u_visc), min_value=0.01, format="%.2f")
+    u_rho = st.sidebar.number_input("Density", value=u_rho, min_value=0.01 if u_rho else None, format="%.2f", placeholder="Enter Custom Density")
+    u_visc = st.sidebar.number_input("Viscosity", value=u_visc, min_value=0.01 if u_visc else None, format="%.2f", placeholder="Enter Custom Viscosity")
 
 with st.sidebar.expander("4. Coefficients"):
     Kd = st.number_input("Kd", value=0.975 if service_type!="Liquid" else 0.65, min_value=0.01)
     Kb = st.number_input("Kb", value=1.0, min_value=0.01); Kc = st.number_input("Kc", value=1.0, min_value=0.01)
 
-# --- 5. MECHANICAL MOC UPDATES WITH DYNAMIC OVERRIDE ---
+# --- 5. MECHANICAL ---
 st.sidebar.markdown("---")
 st.sidebar.header("5. Mechanical")
 
@@ -306,7 +311,6 @@ lever_type = custom_select(st.sidebar, "Lever", ["None", "Packed", "Open"], "lev
 bellows_req = st.sidebar.checkbox("Bellows Required?", False)
 
 c_m1, c_m2 = st.sidebar.columns(2)
-# Added SS304 and CF8 to body_opts
 body_opts = ["A216 Gr WCB", "SS316", "SS304", "CF8", "A351 Gr. CF3", "A351 Gr. CF3M", "A351 Gr. CF8M"]
 body_mat = custom_select(c_m1, "Body", body_opts, "body")
 
@@ -323,7 +327,6 @@ spring_mat = custom_select(c_m4, "Spring", spring_opts, "spring")
 st.sidebar.subheader("End Connections")
 P_set_bar = raw_P1 / 14.5 if unit_P1 == "psig" else (raw_P1 * 0.98 if unit_P1 == "kg/cm2g" else raw_P1)
 
-# Back Pressure Checking & Warning
 bp_percent = (total_bp / P_set_bar) * 100 if P_set_bar > 0 else 0
 if not bellows_req and bp_percent > 10:
     st.sidebar.warning(f"⚠️ Back Pressure ({bp_percent:.1f}%) > 10%. Consider adding a Bellows.")
@@ -352,7 +355,10 @@ if valve_standard == "API 526 (Flanged)":
     
 else: 
     conn_style = st.sidebar.radio("Connection Style", ["Threaded / Socket Weld", "Flanged"], horizontal=True)
-    target_orf = designated_orf if calc_mode.startswith("Capacity") else st.sidebar.selectbox("Select Target Orifice (For Conn Check)", ["B","D","E","F","G"])
+    
+    # Unified Target Orifice for Non-API
+    non_api_orfs = [k for k in ORIFICE_DATA.keys() if k != 'C']
+    target_orf = designated_orf if calc_mode.startswith("Capacity") else st.sidebar.selectbox("Select Target Orifice (For Conn Check)", non_api_orfs)
     max_p = ORIFICE_DATA[target_orf]['max_p']
     if P_set_bar > max_p: st.sidebar.error(f"⛔ Orifice {target_orf} Max Pressure is {max_p} bar!")
 
@@ -364,18 +370,10 @@ else:
         c_type = custom_select(c3, "Type", ["NPT (M x F)", "NPT (F x F)", "BSP", "SW"], "th_type")
         conn_str = f"{in_sz} x {out_sz} {c_type}"
     else:
-        st.sidebar.caption(f"Filtering for Orifice: {target_orf}")
-        valid_inlets = []
-        if target_orf in ["B", "D"]: valid_inlets.extend(["1/2\"", "3/4\"", "1\""])
-        if target_orf == "E": valid_inlets.extend(["3/4\"", "1\""])
-        if target_orf in ["F", "G"]: valid_inlets.extend(["1\"", "1-1/2\""])
-        in_sz = custom_select(st.sidebar, "Inlet Size", sorted(list(set(valid_inlets))), "fl_in_sz")
-        
-        valid_outlets = []
-        if in_sz == "1/2\"": valid_outlets = ["1/2\"", "3/4\"", "1\""]
-        elif in_sz == "3/4\"": valid_outlets = ["3/4\"", "1\""]
-        elif in_sz == "1\"": valid_outlets = ["1\"", "1-1/2\""]
-        elif in_sz == "1-1/2\"": valid_outlets = ["2\" (Std)"]
+        st.sidebar.caption(f"Filtering connections for Flanged TR-01")
+        valid_inlets = ["1/2\"", "3/4\"", "1\"", "1-1/2\"", "2\"", "3\"", "4\"", "6\"", "8\""]
+        in_sz = custom_select(st.sidebar, "Inlet Size", valid_inlets, "fl_in_sz")
+        valid_outlets = ["1/2\"", "3/4\"", "1\"", "1-1/2\"", "2\"", "3\"", "4\"", "6\"", "8\"", "10\""]
         out_sz = custom_select(st.sidebar, "Outlet Size", valid_outlets, "fl_out_sz")
         
         avail_in_ratings = [r for r, lim in FLANGE_LIMITS.items() if lim >= P_set_bar]
@@ -403,6 +401,14 @@ st.title("🛡️ SGM Valves - Sizing Pro")
 st.markdown("### 📊 Sizing Dashboard")
 
 if st.button("🚀 Calculate & Generate Datasheet"):
+    
+    if service_type == "Gas/Vapor" and (u_Mw is None or u_k is None):
+        st.error("🚨 Please enter the Molecular Weight (MW) and Specific Heat Ratio (k) for your Custom Fluid.")
+        st.stop()
+    elif service_type == "Liquid" and (u_rho is None or u_visc is None):
+        st.error("🚨 Please enter the Density and Viscosity for your Custom Fluid.")
+        st.stop()
+        
     T_K = raw_T1 + 273.15 if unit_T1 == "°C" else (raw_T1 - 32)*5/9 + 273.15
     P1_abs = (P_set_bar * op_mult) + 1.013
     
@@ -431,19 +437,17 @@ if st.button("🚀 Calculate & Generate Datasheet"):
             req_area = (Q_gpm * math.sqrt(u_rho/1000)) / (38 * Kd * math.sqrt(dP*14.5)) * 645.16
             form_str = "A = Q / (Kd * sqrt(dP))"
             
-        # Updated chk_orf to completely remove 'C' for Non-API
         chk_orf = {k:v for k,v in ORIFICE_DATA.items() if k != 'C'} if valve_standard.startswith("Non") else {k:v for k,v in ORIFICE_DATA.items() if k in API_526_SIZES}
         for l, d in chk_orf.items():
             if d['area'] >= req_area and P_set_bar <= d['max_p']:
-                sel_orf = l; sel_area = d['area']; break
-        if not sel_orf: st.error("No Orifice Found"); st.stop()
+                # FIXED: Force the software to select an orifice AT LEAST as big as the Target Orifice you manually selected
+                if d['area'] >= ORIFICE_DATA[target_orf]['area']:
+                    sel_orf = l; sel_area = d['area']; break
+        if not sel_orf: st.error("No Orifice Found to fit parameters."); st.stop()
         
     else: # Capacity Mode
         sel_orf = designated_orf; sel_area = ORIFICE_DATA[sel_orf]['area']; form_str = "Rated Capacity"
         if P_set_bar > ORIFICE_DATA[sel_orf]['max_p']: st.warning("Pressure Exceeded!")
-
-    if calc_mode.startswith("Sizing") and valve_standard == "API 526 (Flanged)" and sel_orf != target_orf:
-        st.warning(f"⚠️ **Note:** You pre-selected connections for an '{target_orf}' Orifice, but the required calculated Orifice is '{sel_orf}'. You may need to recalculate with the correct connections.")
 
     # Reverse Calc
     if service_type == "Gas/Vapor":
@@ -469,7 +473,12 @@ if st.button("🚀 Calculate & Generate Datasheet"):
 
     fname = "spring_api.csv" if "API" in valve_standard else "spring_non_api.csv"
     res_c, res_min, res_max = get_spring_from_file(fname, sel_orf, P_set_bar)
-    spring_txt = f"{res_c} ({res_min}-{res_max} bar)" if not str(res_c).startswith("Err") else str(res_c)
+    
+    # FIXED: Clean fallback formatting for missing Spring Data
+    if res_c == "Consult Factory" or str(res_c).startswith("Err"):
+        spring_txt = str(res_c)
+    else:
+        spring_txt = f"{res_c} ({res_min}-{res_max} bar)"
     
     force_spr = (P_set_bar * 0.1) * sel_area
     W_kgs = W_rated / 3600.0
@@ -485,12 +494,15 @@ if st.button("🚀 Calculate & Generate Datasheet"):
 
     req_str = f"{raw_W} {unit_W}" if calc_mode.startswith("Sizing") else "N/A"
     proj = {"Customer": customer, "Tag": tag_no, "Offer": offer_no, "Enquiry": enquiry_no, "Model No": model_no}
-    # Used display_fluid here so the custom written name prints to the PDF
     proc = {"Service": service_type, "Fluid": display_fluid, "Set P": f"{raw_P1} {unit_P1}", "Flow": req_str, "Overpressure": overpressure_opt}
     mech = {"Standard": valve_standard, "Size": conn_str, "Body": body_mat, "Trim": nozzle_mat, "Disc": disc_mat, "Orifice": sel_orf}
     res = {"Req Area": f"{req_area:.2f} mm2", "Sel Area": f"{sel_area} mm2", "RATED CAP": f"{disp_cap:.2f} {unit_W}", "Formula": form_str}
     safe = {"Spring Mat": spring_mat, "Spring No": spring_txt, "Spring Load": f"{force_spr:.1f} N", "React Force": f"{force_react:.1f} N", "Noise": noise}
-    fluid_d = {"MW": u_Mw, "k": u_k, "SG": f"{u_rho/1000:.3f}", "Kd": Kd}
+    
+    sg_disp = f"{u_rho/1000:.3f}" if u_rho is not None else "N/A"
+    mw_disp = f"{u_Mw:.2f}" if u_Mw is not None else "N/A"
+    k_disp = f"{u_k:.2f}" if u_k is not None else "N/A"
+    fluid_d = {"MW": mw_disp, "k": k_disp, "SG": sg_disp, "Kd": Kd}
     
     full_data = {'proj': proj, 'proc': proc, 'fluid': fluid_d, 'mech': mech, 'res': res, 'safety': safe}
     pdf_b = generate_single_pdf(full_data)
@@ -507,6 +519,9 @@ if st.session_state.last_results:
         st.download_button("📥 Datasheet", st.session_state.project_log[-1]['PDF'], f"{tag_no}.pdf", "application/pdf")
     else: st.warning("Download Restricted")
 
+# ==========================================
+# 8. PROJECT HISTORY & DELETION
+# ==========================================
 st.markdown("---")
 st.markdown("### 🗃️ Project History")
 current_offer_filter = offer_no.strip()
@@ -515,16 +530,16 @@ filtered_history = [item for item in st.session_state.project_log if item.get('O
 if filtered_history:
     disp_log = [{k: v for k, v in item.items() if k not in ['PDF', 'data']} for item in filtered_history]
     df_log = pd.DataFrame(disp_log)
+    
+    df_log.insert(0, "ID", range(1, len(df_log) + 1))
     st.table(df_log)
     
     col1, col2 = st.columns(2)
-    
     with col1:
         if st.session_state.user_role == 'admin':
             if st.button("📦 Download Project Report (Single PDF)"):
                 combined_pdf_bytes = generate_combined_pdf(filtered_history)
                 st.download_button("⬇️ Click to Download Combined Report", combined_pdf_bytes, f"Project_{current_offer_filter}.pdf", "application/pdf")
-    
     with col2:
         csv_data = df_log.to_csv(index=False).encode('utf-8')
         st.download_button(
@@ -533,5 +548,23 @@ if filtered_history:
             file_name=f"Sizing_History_{current_offer_filter}.csv",
             mime="text/csv"
         )
+        
+    st.markdown("#### 🗑️ Remove Record")
+    c_del1, c_del2 = st.columns([3, 1])
+    
+    del_opts = [f"ID {i+1}: {item['Tag']} (Orifice: {item.get('Orifice', '')})" for i, item in enumerate(filtered_history)]
+    record_to_del = c_del1.selectbox("Select record to delete:", ["-- Select --"] + del_opts)
+    
+    if c_del2.button("❌ Delete"):
+        if record_to_del != "-- Select --":
+            idx = int(record_to_del.split(":")[0].replace("ID ", "")) - 1
+            item_to_remove = filtered_history[idx]
+            
+            st.session_state.project_log.remove(item_to_remove)
+            save_history_to_file()
+            st.rerun() 
+        else:
+            st.warning("Please select a valid record to delete.")
+
 else: 
     st.info(f"No sizing history found for Offer No: {current_offer_filter}")
